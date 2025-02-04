@@ -477,10 +477,10 @@ class DiaryTUI:
         self.tasks_cache = {}
         self.task_pane_focused = False
         self.timeblock_pane_focused = False
-        self.preview_pane_focused = False
+        self.preview_pane_focused = False # Not focusable by '0' anymore
         self.selected_task_index = 0
         self.selected_timeblock_index = 0
-        self.show_tasks = True
+        self.show_tasks = True # In side-by-side, show tasks by default, else timeblock
         self.non_side_by_side_mode = "timeblock"  # "preview", "tasks", "timeblock"
         self.calendar_height_non_side = 0
         self.calendar_height_side = 0
@@ -778,10 +778,6 @@ class DiaryTUI:
             return True
         elif key == curses.KEY_MOUSE:
             self.handle_mouse()
-        elif key == ord('1'):
-            self.open_file_in_editor(HOME_FILE)
-        elif key == ord('2'):
-            self.open_file_in_editor(TASKS_FILE)
         elif key == ord('s'):
             self.show_week_stats(height, width)
         elif key in (ord('m'), ord('w'), ord('y')):
@@ -795,7 +791,7 @@ class DiaryTUI:
             self.preview_pane_focused = False
             self.selected_task_index = 0
             self.selected_timeblock_index = 0
-            self.non_side_by_side_mode = "preview"
+            self.non_side_by_side_mode = "timeblock"
         elif key in (ord('h'), curses.KEY_LEFT):
             self.move_day(-1)
         elif key in (ord('l'), curses.KEY_RIGHT):
@@ -842,20 +838,21 @@ class DiaryTUI:
             self.scroll_preview(key)
         elif key == ord('0'):
             self.toggle_focus()
-        elif key == ord('-'):
+        elif key == ord('1'): # Timeblock view
+            self.non_side_by_side_mode = "timeblock"
             if self.is_side_by_side:
-                self.show_tasks = not self.show_tasks
-                self.task_pane_focused = self.show_tasks
-                self.timeblock_pane_focused = not self.show_tasks
-                self.preview_scroll = 0
-            else:
-                if self.non_side_by_side_mode == "preview":
-                    self.non_side_by_side_mode = "tasks"
-                elif self.non_side_by_side_mode == "tasks":
-                    self.non_side_by_side_mode = "timeblock"
-                elif self.non_side_by_side_mode == "timeblock":
-                    self.non_side_by_side_mode = "preview"
-                self.preview_scroll = 0
+                self.show_tasks = False
+                self.task_pane_focused = False
+                self.timeblock_pane_focused = True
+        elif key == ord('2'): # Tasks view
+            self.non_side_by_side_mode = "tasks"
+            if self.is_side_by_side:
+                self.show_tasks = True
+                self.task_pane_focused = True
+                self.timeblock_pane_focused = False
+        elif key == ord('3'): # Preview view (only fullscreen)
+            if not self.is_side_by_side:
+                self.non_side_by_side_mode = "preview"
         elif key in (10, 13) and self.task_pane_focused:
             self.toggle_task()
         elif key in (10, 13) and self.timeblock_pane_focused:
@@ -1076,8 +1073,10 @@ class DiaryTUI:
             "  f        : Filter by tag",
             "  M/W/P/I  : Toggle metadata (meditate/workout/pomodoros/important)",
             "  L        : List links",
-            "  0        : Toggle focus between panes",
-            "  -        : Toggle tasks/timeblock (or cycle preview/tasks/timeblock in fullscreen)",
+            "  0        : Toggle focus between Tasks/Timeblock panes",
+            "  1        : Show Timeblock view",
+            "  2        : Show Tasks view",
+            "  3        : Show Preview view (fullscreen only)",
             "  Ctrl+P   : Command Palette",
             "  q        : Quit",
             "",
@@ -1123,10 +1122,11 @@ class DiaryTUI:
         else:
             if self.non_side_by_side_mode == "tasks":
                 self.task_pane_focused = not self.task_pane_focused
+                self.timeblock_pane_focused = False
             elif self.non_side_by_side_mode == "timeblock":
                 self.timeblock_pane_focused = not self.timeblock_pane_focused
-            else:
-                self.preview_pane_focused = not self.preview_pane_focused
+                self.task_pane_focused = False
+            # Preview pane is never focused by '0' in fullscreen mode
 
     def toggle_task(self):
         if not self.task_pane_focused or not self.tasks_cache.get("lines"):
