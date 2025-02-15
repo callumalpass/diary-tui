@@ -9,6 +9,7 @@ Features:
   - Tasks can be filtered by status: open, in-progress, or done.
   - Toggle a task’s status by cycling through open → in-progress → done → open.
   - Keybind (O) to open the currently selected task in your editor.
+  - New keybinds: (x) to delete a task and (z) to cycle its priority.
   - Timeblock editing/updating (including adding an empty timeblock template).
   - Multiple calendar views: year, month, week.
   - Search and tag filtering.
@@ -315,88 +316,121 @@ def add_default_timeblock(file_path: Path):
         return False
 
 # ---------------------------------------------------------------------
-# TASKS & INDEX FUNCTIONS
+# TASKS & INDEX FUNCTIONS (Improved Version)
 # ---------------------------------------------------------------------
-# Cache for index.json
-INDEX_CACHE = {"data": None, "mtime": 0}
-
-def load_index():
-    global INDEX_CACHE
-    index_file = NOTES_DIR / "index.json"
-    try:
-        current_mtime = index_file.stat().st_mtime
-        if INDEX_CACHE["data"] is None or current_mtime != INDEX_CACHE["mtime"]:
-            with index_file.open("r", encoding="utf-8") as f:
-                INDEX_CACHE["data"] = json.load(f)
-            INDEX_CACHE["mtime"] = current_mtime
-        return INDEX_CACHE["data"]
-    except Exception as e:
-        logging.error(f"Error loading index file {index_file}: {e}")
-        return []
-
-def get_tasks_from_index():
-    index_data = load_index()
-    tasks = []
-    for note in index_data:
-        tags = note.get("tags")
-        if isinstance(tags, list) and "task" in tags:
-            tasks.append(note)
-    tasks.sort(key=lambda t: t.get("datetime", ""))
-    return tasks
-
-def get_filtered_tasks(task_filter):
-    tasks = get_tasks_from_index()
-    return [t for t in tasks if t.get("status", "open") == task_filter]
-
 def generate_task_filename():
     date_prefix = datetime.now().strftime("%y%m%d")
     suffix = ''.join(random.choices(string.ascii_lowercase, k=3))
     return f"{date_prefix}{suffix}.md"
 
-def create_task_note(task_title, due=None, priority="normal", extra_tags=None):
-    filename = generate_task_filename()
-    zettelid = filename[:-3]  # without .md
-    file_path = NOTES_DIR / filename
-    now_dt = datetime.now()
-    now_str = now_dt.strftime("%Y-%m-%dT%H:%M:%S")
-    today = now_dt.strftime("%Y-%m-%d")
-    frontmatter = {
-        "title": task_title,
-        "zettelid": zettelid,
-        "date": today,
-        "datetime": now_str,
-        "dateModified": now_str,
-        "status": "open",
-        "due": due,
-        "tags": ["task"] + (extra_tags if extra_tags else []),
-        "priority": priority
-    }
-    content = (
-        "---\n" +
-        yaml.dump(frontmatter, sort_keys=False) +
-        "---\n\n" +
-        f"# {task_title}\n\n"
-    )
-    try:
-        with file_path.open("w", encoding="utf-8") as f:
-            f.write(content)
-        logging.info(f"Created task note: {file_path}")
-        return file_path
-    except Exception as e:
-        logging.error(f"Error creating task note: {e}")
-        return None
+class TaskManager:
+    def __init__(self, notes_dir: Path):
+        self.notes_dir = notes_dir
+        self.index_cache = {"data": None, "mtime": 0}
+        self.tasks = []
+        self.load_tasks()
 
-def toggle_task_status(task_path: Path):
-    md = metadata_cache.get_metadata(task_path)
-    current_status = md.get("status", "open")
-    new_status = {"open": "in-progress", "in-progress": "done", "done": "open"}.get(current_status, "open")
-    md["status"] = new_status
-    if metadata_cache.rewrite_front_matter(task_path, md):
-        logging.info(f"Set task {task_path} status to {new_status}")
-        return True
-    else:
-        logging.error(f"Failed to update task status for {task_path}")
-        return False
+    def load_index(self):
+        index_file = self.notes_dir / "index.json"
+        try:
+            current_mtime = index_file.stat().st_mtime
+            if self.index_cache["data"] is None or current_mtime != self.index_cache["mtime"]:
+                with index_file.open("r", encoding="utf-8") as f:
+                    self.index_cache["data"] = json.load(f)
+                self.index_cache["mtime"] = current_mtime
+            return self.index_cache["data"]
+        except Exception as e:
+            logging.error(f"Error loading index file {index_file}: {e}")
+            return []
+
+    def load_tasks(self):
+        index_data = self.load_index()
+        tasks = []
+        for note in index_data:
+            tags = note.get("tags")
+            if isinstance(tags, list) and "task" in tags:
+                tasks.append(note)
+        # sort tasks first by due date (if any) and then by priority
+        def sort_key(task):
+            due = task.get("due")
+            try:
+                due_date = datetime.strptime(due, "%Y-%m-%d") if due else datetime.max
+            except Exception:
+                due_date = datetime.max
+            priority = task.get("priority", "normal")
+            priority_order = {"high": 0, "normal": 1, "low": 2}
+            return (due_date, priority_order.get(priority, 1))
+        tasks.sort(key=sort_key)
+        self.tasks = tasks
+
+    def filter_tasks(self, status_filter):
+        return [t for t in self.tasks if t.get("status", "open") == status_filter]
+
+    def create_task(self, title, due=None, priority="normal", extra_tags=None):
+        filename = generate_task_filename()
+        zettelid = filename[:-3]  # without .md
+        file_path = NOTES_DIR / filename
+        now_dt = datetime.now()
+        now_str = now_dt.strftime("%Y-%m-%dT%H:%M:%S")
+        today = now_dt.strftime("%Y-%m-%d")
+        frontmatter = {
+            "title": title,
+            "zettelid": zettelid,
+            "date": today,
+            "datetime": now_str,
+            "dateModified": now_str,
+            "status": "open",
+            "due": due,
+            "tags": ["task"] + (extra_tags if extra_tags else []),
+            "priority": priority
+        }
+        content = (
+            "---\n" +
+            yaml.dump(frontmatter, sort_keys=False) +
+            "---\n\n" +
+            f"# {title}\n\n"
+        )
+        try:
+            with file_path.open("w", encoding="utf-8") as f:
+                f.write(content)
+            logging.info(f"Created task note: {file_path}")
+            return file_path
+        except Exception as e:
+            logging.error(f"Error creating task note: {e}")
+            return None
+
+    def toggle_task_status(self, task_path: Path):
+        md = metadata_cache.get_metadata(task_path)
+        current_status = md.get("status", "open")
+        new_status = {"open": "in-progress", "in-progress": "done", "done": "open"}.get(current_status, "open")
+        md["status"] = new_status
+        if metadata_cache.rewrite_front_matter(task_path, md):
+            logging.info(f"Set task {task_path} status to {new_status}")
+            return True
+        else:
+            logging.error(f"Failed to update task status for {task_path}")
+            return False
+
+    def cycle_task_priority(self, task_path: Path):
+        md = metadata_cache.get_metadata(task_path)
+        current_priority = md.get("priority", "normal")
+        new_priority = {"low": "normal", "normal": "high", "high": "low"}.get(current_priority, "normal")
+        md["priority"] = new_priority
+        if metadata_cache.rewrite_front_matter(task_path, md):
+            logging.info(f"Set task {task_path} priority to {new_priority}")
+            return True
+        else:
+            logging.error(f"Failed to update task priority for {task_path}")
+            return False
+
+    def delete_task(self, task_path: Path):
+        try:
+            task_path.unlink()
+            logging.info(f"Deleted task: {task_path}")
+            return True
+        except Exception as e:
+            logging.error(f"Error deleting task {task_path}: {e}")
+            return False
 
 # ---------------------------------------------------------------------
 # HELPER FUNCTIONS (DIARY, SEARCH, LINKS, ETC.)
@@ -520,13 +554,13 @@ class DiaryTUI:
         # Initialize color pairs
         curses.init_pair(1, curses.COLOR_CYAN, -1)
         curses.init_pair(2, -1, curses.COLOR_CYAN)
-        curses.init_pair(3, curses.COLOR_GREEN, -1)
+        curses.init_pair(3, curses.COLOR_GREEN, -1)      # low priority
         curses.init_pair(4, curses.COLOR_MAGENTA, -1)
-        curses.init_pair(5, curses.COLOR_RED, -1)
+        curses.init_pair(5, curses.COLOR_RED, -1)        # high priority / important
         curses.init_pair(6, curses.COLOR_YELLOW, -1)
         curses.init_pair(7, curses.COLOR_WHITE, curses.COLOR_BLUE)
         curses.init_pair(8, curses.COLOR_BLACK, -1)
-        curses.init_pair(9, curses.COLOR_YELLOW, curses.COLOR_BLACK)
+        curses.init_pair(9, curses.COLOR_BLUE, -1)  # overdue
         curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
         curses.mouseinterval(0)
         self.cal = calendar.TextCalendar(calendar.SUNDAY)
@@ -541,6 +575,9 @@ class DiaryTUI:
         self.nvim_path = shutil.which("nvim")
         self.tmux_path = shutil.which("tmux")
         self.fallback_editor = shutil.which("vi") or shutil.which("nano")
+        # Tasks-related attributes
+        self.task_filter = "open"  # filter for tasks: "open", "in-progress", "done"
+        self.task_manager = TaskManager(NOTES_DIR)
         self.tasks_list = []  # list of task dicts from the index
         self.selected_task_index = 0
         self.selected_timeblock_index = 0
@@ -553,7 +590,6 @@ class DiaryTUI:
         self.task_pane_focused = False
         self.timeblock_pane_focused = False
         self.preview_pane_focused = False
-        self.task_filter = "open"  # filter for tasks: "open", "in-progress", "done"
 
     def get_week_start(self) -> datetime:
         # Compute the week start (Sunday) for the selected date.
@@ -700,7 +736,19 @@ class DiaryTUI:
         draw_preview(self.stdscr, lines, preview_y, preview_x, height, width, self.preview_scroll)
 
     def read_tasks_cache(self):
-        self.tasks_list = get_filtered_tasks(self.task_filter)
+        self.task_manager.load_tasks()
+        self.tasks_list = self.task_manager.filter_tasks(self.task_filter)
+
+    def display_error(self, msg):
+        height, width = self.stdscr.getmaxyx()
+        # Display the message on the second-to-last line in bold.
+        try:
+            self.stdscr.addnstr(height - 2, 2, msg, width - 4, curses.A_BOLD)
+        except curses.error:
+            pass
+        self.stdscr.refresh()
+        time.sleep(1)  # Pause for a moment so you can read the message.
+
 
     def draw_tasks_pane(self, height, width):
         tasks_y = self.calendar_height_side + 3
@@ -708,15 +756,33 @@ class DiaryTUI:
         available_height = height - tasks_y - 1
         available_width = (width // 2) - 4
         self.read_tasks_cache()
-        tasks_lines = []
-        for task in self.tasks_list:
+        for idx, task in enumerate(self.tasks_list[self.preview_scroll:self.preview_scroll + available_height]):
             status = task.get("status", "open")
             mark = "[x]" if status == "done" else ("[~]" if status == "in-progress" else "[ ]")
             title = task.get("title", "Untitled")
             due = task.get("due", "")
-            tasks_lines.append(f"- {mark} {title} (Due: {due})")
-        for idx, line in enumerate(tasks_lines[self.preview_scroll:self.preview_scroll + available_height]):
-            attr = curses.color_pair(6) | curses.A_BOLD if (self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index) else curses.A_NORMAL
+            priority = task.get("priority", "normal")
+            # Determine color based on priority and overdue status
+            attr = curses.A_NORMAL
+            if priority == "high":
+                attr |= curses.color_pair(5)
+            elif priority == "low":
+                attr |= curses.color_pair(3)
+            else:
+                attr |= curses.color_pair(6)
+            # Check overdue: if due date exists and is past and not done
+            if due:
+                try:
+                    due_date = datetime.strptime(due, "%Y-%m-%d")
+                    if due_date < datetime.today() and status != "done":
+                        attr = curses.color_pair(9) | curses.A_BOLD
+                except Exception:
+                    pass
+            line = f"- {mark} {title}"
+            if self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index:
+                attr |= curses.A_REVERSE
+            if due:
+                line += f" (Due: {due})"
             try:
                 self.stdscr.addnstr(tasks_y + idx, tasks_x, line, available_width, attr)
             except curses.error:
@@ -728,15 +794,31 @@ class DiaryTUI:
         available_height = height - tasks_y - 3
         available_width = width - 4
         self.read_tasks_cache()
-        tasks_lines = []
-        for task in self.tasks_list:
+        for idx, task in enumerate(self.tasks_list[self.preview_scroll:self.preview_scroll + available_height]):
             status = task.get("status", "open")
             mark = "[x]" if status == "done" else ("[~]" if status == "in-progress" else "[ ]")
             title = task.get("title", "Untitled")
             due = task.get("due", "")
-            tasks_lines.append(f"- {mark} {title} (Due: {due})")
-        for idx, line in enumerate(tasks_lines[self.preview_scroll:self.preview_scroll + available_height]):
-            attr = curses.color_pair(6) | curses.A_BOLD if (self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index) else curses.A_NORMAL
+            priority = task.get("priority", "normal")
+            attr = curses.A_NORMAL
+            if priority == "high":
+                attr |= curses.color_pair(5)
+            elif priority == "low":
+                attr |= curses.color_pair(3)
+            else:
+                attr |= curses.color_pair(6)
+            if due:
+                try:
+                    due_date = datetime.strptime(due, "%Y-%m-%d")
+                    if due_date < datetime.today() and status != "done":
+                        attr = curses.color_pair(9) | curses.A_BOLD
+                except Exception:
+                    pass
+            line = f"- {mark} {title}"
+            if self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index:
+                attr |= curses.A_REVERSE
+            if due:
+                line += f" (Due: {due})"
             try:
                 self.stdscr.addnstr(tasks_y + idx, tasks_x, line, available_width, attr)
             except curses.error:
@@ -930,6 +1012,12 @@ class DiaryTUI:
         # New keybind: 'R' cycles the task filter (only in tasks view)
         elif key == ord('R') and self.non_side_by_side_mode == "tasks":
             self.cycle_task_filter()
+        # New keybind: 'x' to delete selected task (in tasks view)
+        elif key == ord('x') and self.task_pane_focused:
+            self.delete_selected_task()
+        # New keybind: 'z' to cycle selected task priority (in tasks view)
+        elif key == ord('z') and self.task_pane_focused:
+            self.cycle_selected_task_priority()
         return True
 
     def handle_mouse(self):
@@ -1067,8 +1155,12 @@ class DiaryTUI:
             self.stdscr.addstr(2, 2, "Priority (low, normal, high) [normal]: ")
             self.stdscr.clrtoeol()
             priority = self.stdscr.getstr(2, 44, 10).decode("utf-8").strip() or "normal"
+            self.stdscr.addstr(3, 2, "Extra Tags (comma separated) [optional]: ")
+            self.stdscr.clrtoeol()
+            tags_input = self.stdscr.getstr(3, 40, 50).decode("utf-8").strip()
+            extra_tags = [tag.strip() for tag in tags_input.split(',') if tag.strip()] if tags_input else []
             curses.noecho()
-            created = create_task_note(title, due if due else None, priority)
+            created = self.task_manager.create_task(title, due if due else None, priority, extra_tags)
             if created:
                 self.display_error("Task created successfully.")
             else:
@@ -1087,7 +1179,7 @@ class DiaryTUI:
             filename_prefix = task.get("zettelid")
             for file in NOTES_DIR.glob(f"{filename_prefix}*.md"):
                 if file.is_file():
-                    toggle_task_status(file)
+                    self.task_manager.toggle_task_status(file)
                     break
             self.read_tasks_cache()
 
@@ -1112,6 +1204,39 @@ class DiaryTUI:
             self.task_filter = "open"
         self.selected_task_index = 0
         self.preview_scroll = 0
+
+    def delete_selected_task(self):
+        self.read_tasks_cache()
+        if not self.tasks_list:
+            return
+        task = self.tasks_list[self.selected_task_index]
+        filename_prefix = task.get("zettelid")
+        task_title = task.get("title")
+        for file in NOTES_DIR.glob(f"{filename_prefix}*.md"):
+            if file.is_file():
+                delete_confirm = f"Delete task '{task_title}' ({filename_prefix})? (y/n): "
+                self.stdscr.addstr(0, 2, delete_confirm)
+                self.stdscr.clrtoeol()
+                self.stdscr.refresh()
+                confirm = self.stdscr.getch()
+                if confirm in (ord('y'), ord('Y')):
+                    if self.task_manager.delete_task(file):
+                        self.display_error("Task deleted successfully.")
+                        self.selected_task_index = max(0, self.selected_task_index - 1)
+                        self.read_tasks_cache()
+                break
+
+    def cycle_selected_task_priority(self):
+        self.read_tasks_cache()
+        if not self.tasks_list:
+            return
+        task = self.tasks_list[self.selected_task_index]
+        filename_prefix = task.get("zettelid")
+        for file in NOTES_DIR.glob(f"{filename_prefix}*.md"):
+            if file.is_file():
+                if self.task_manager.cycle_task_priority(file):
+                    self.display_error("Task priority cycled.")
+                break
 
     def add_timeblock_entry(self, file_path: Path, date_str: str, selected_time: str):
         try:
@@ -1191,7 +1316,9 @@ class DiaryTUI:
             "  3        : Show Preview view (fullscreen only)",
             "  R        : Cycle task filter (open -> in-progress -> done)",
             "  O        : Open selected task in editor",
-            "  Enter    : In Tasks view, cycle selected task status",
+            "  x        : Delete selected task (in Tasks view)",
+            "  z        : Cycle task priority (in Tasks view)",
+            "  Enter    : In Tasks view, toggle selected task status",
             "  Ctrl+P   : Command Palette",
             "  q        : Quit",
             "",
