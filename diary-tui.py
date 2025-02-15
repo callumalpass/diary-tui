@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 """
-CALENDAR/TIME-MANAGING/VIEWING SCRIPT
+CALENDAR/TIME-MANAGING/VIEWING SCRIPT (with TASK NOTES)
 
 Features:
   - Daily diary entries with YAML frontmatter metadata.
-  - Tasks and timeblock editing/updating (including adding an empty timeblock template).
+  - Tasks are individual markdown notes in NOTES_DIR (with YAML frontmatter).
+  - Tasks are indexed via NOTES_DIR/index.json.
+  - Tasks can be filtered by status: open, in-progress, or done.
+  - Toggle a task’s status by cycling through open → in-progress → done → open.
+  - Keybind (O) to open the currently selected task in your editor.
+  - Timeblock editing/updating (including adding an empty timeblock template).
   - Multiple calendar views: year, month, week.
   - Search and tag filtering.
   - Side-by-side and fullscreen modes for preview, tasks, and timeblock views.
   - Obsidian-style link parsing and integration with your editor.
   - Live screen refresh and mouse support.
-  - A context‑aware command palette (Ctrl+P) for quick commands.
+  - A context-aware command palette (Ctrl+P) for quick commands.
   - Robust error handling with logging.
 
-Dependencies: curses, yaml
+Dependencies: curses, yaml, json
 """
 
 import threading
@@ -24,9 +29,13 @@ import subprocess
 import shutil
 import re
 import yaml
+import json
 import os
 import sys
 import logging
+import random
+import string
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
@@ -35,23 +44,18 @@ import hashlib
 # ---------------------------------------------------------------------
 # CONFIGURATION
 # ---------------------------------------------------------------------
-
 CONFIG_DIR = Path.home() / ".config" / "diary-tui"
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
 
 DEFAULT_CONFIG = {
     "diary_dir": "/home/calluma/Dropbox/notes/diary",
     "notes_dir": "/home/calluma/Dropbox/notes",
-    "tasks_file": "/home/calluma/Dropbox/notes/o7qtm.md",
     "home_file": "/home/calluma/Dropbox/notes/home.md",
     "log_file": "/tmp/calendar_tui.log",
-    "editor": "nvim"  # Or leave empty for auto-detection, or specify "vi", "nano" etc.
+    "editor": "nvim"  # or specify "vi", "nano", etc.
 }
 
 def load_config():
-    """Loads configuration from ~/.config/diary-tui/config.yaml,
-       or uses default values if the file is not found or incomplete.
-    """
     config = DEFAULT_CONFIG.copy()
     if CONFIG_FILE.exists():
         try:
@@ -74,16 +78,15 @@ CONFIG = load_config()
 
 DIARY_DIR = Path(CONFIG["diary_dir"])
 NOTES_DIR = Path(CONFIG["notes_dir"])
-TASKS_FILE = Path(CONFIG["tasks_file"])
 HOME_FILE = Path(CONFIG["home_file"])
 LOG_FILE = Path(CONFIG["log_file"])
-EDITOR_CONFIG = CONFIG.get("editor", "").strip() # Get editor from config, might be empty string
+EDITOR_CONFIG = CONFIG.get("editor", "").strip()
 
 logging.basicConfig(filename=LOG_FILE, level=logging.DEBUG,
                     format='%(asctime)s [%(levelname)s] %(message)s')
 
 # ---------------------------------------------------------------------
-# YAML FRONTMATTER UTILS
+# YAML FRONTMATTER UTILITIES
 # ---------------------------------------------------------------------
 class MetadataCache:
     def __init__(self):
@@ -244,7 +247,6 @@ class TimeblockCache:
             with file_path.open("w", encoding="utf-8") as f:
                 f.writelines(new_lines)
             self.get_timeblock(file_path)
-            # return True, "Timeblock updated successfully."
         except Exception as e:
             logging.error(f"Error updating timeblock in {file_path}: {e}")
             return False, f"Error writing file: {e}"
@@ -252,7 +254,6 @@ class TimeblockCache:
 timeblock_cache = TimeblockCache()
 
 def add_default_timeblock(file_path: Path):
-    """Adds an empty timeblock template if none exists."""
     default_timeblock = [
         "| Time  | Activity |",
         "| ----- | --------- |",
@@ -314,7 +315,92 @@ def add_default_timeblock(file_path: Path):
         return False
 
 # ---------------------------------------------------------------------
-# HELPER FUNCTIONS
+# TASKS & INDEX FUNCTIONS
+# ---------------------------------------------------------------------
+# Cache for index.json
+INDEX_CACHE = {"data": None, "mtime": 0}
+
+def load_index():
+    global INDEX_CACHE
+    index_file = NOTES_DIR / "index.json"
+    try:
+        current_mtime = index_file.stat().st_mtime
+        if INDEX_CACHE["data"] is None or current_mtime != INDEX_CACHE["mtime"]:
+            with index_file.open("r", encoding="utf-8") as f:
+                INDEX_CACHE["data"] = json.load(f)
+            INDEX_CACHE["mtime"] = current_mtime
+        return INDEX_CACHE["data"]
+    except Exception as e:
+        logging.error(f"Error loading index file {index_file}: {e}")
+        return []
+
+def get_tasks_from_index():
+    index_data = load_index()
+    tasks = []
+    for note in index_data:
+        tags = note.get("tags")
+        if isinstance(tags, list) and "task" in tags:
+            tasks.append(note)
+    tasks.sort(key=lambda t: t.get("datetime", ""))
+    return tasks
+
+def get_filtered_tasks(task_filter):
+    tasks = get_tasks_from_index()
+    return [t for t in tasks if t.get("status", "open") == task_filter]
+
+def generate_task_filename():
+    date_prefix = datetime.now().strftime("%y%m%d")
+    suffix = ''.join(random.choices(string.ascii_lowercase, k=3))
+    return f"{date_prefix}{suffix}.md"
+
+def create_task_note(task_title, due=None, priority="normal", extra_tags=None):
+    filename = generate_task_filename()
+    zettelid = filename[:-3]  # without .md
+    file_path = NOTES_DIR / filename
+    now_dt = datetime.now()
+    now_str = now_dt.strftime("%Y-%m-%dT%H:%M:%S")
+    today = now_dt.strftime("%Y-%m-%d")
+    frontmatter = {
+        "title": task_title,
+        "zettelid": zettelid,
+        "date": today,
+        "datetime": now_str,
+        "dateModified": now_str,
+        "status": "open",
+        "due": due,
+        "tags": ["task"] + (extra_tags if extra_tags else []),
+        "priority": priority
+    }
+    content = (
+        "---\n" +
+        yaml.dump(frontmatter, sort_keys=False) +
+        "---\n\n" +
+        f"# {task_title}\n\n" +
+        "*Details:*  \nUpdate task details here...\n"
+    )
+    try:
+        with file_path.open("w", encoding="utf-8") as f:
+            f.write(content)
+        logging.info(f"Created task note: {file_path}")
+        return file_path
+    except Exception as e:
+        logging.error(f"Error creating task note: {e}")
+        return None
+
+def toggle_task_status(task_path: Path):
+    md = metadata_cache.get_metadata(task_path)
+    current_status = md.get("status", "open")
+    new_status = {"open": "in-progress", "in-progress": "done", "done": "open"}.get(current_status, "open")
+    md["status"] = new_status
+    if metadata_cache.rewrite_front_matter(task_path, md):
+        logging.info(f"Set task {task_path} status to {new_status}")
+        return True
+    else:
+        logging.error(f"Failed to update task status for {task_path}")
+        return False
+
+# ---------------------------------------------------------------------
+# HELPER FUNCTIONS (DIARY, SEARCH, LINKS, ETC.)
 # ---------------------------------------------------------------------
 def calculate_week_stats_from_date(start_of_week: datetime) -> dict:
     total_pomodoros = 0
@@ -336,24 +422,6 @@ def calculate_week_stats_from_date(start_of_week: datetime) -> dict:
         "week_start": start_of_week.strftime("%Y-%m-%d"),
         "week_end": (start_of_week + timedelta(days=6)).strftime("%Y-%m-%d")
     }
-
-def parse_tasks(file_path: Path):
-    if not file_path.exists():
-        return (0, 0)
-    try:
-        with file_path.open("r", encoding="utf-8") as f:
-            lines = f.readlines()
-    except Exception as e:
-        logging.error(f"Error parsing tasks {file_path}: {e}")
-        return (0, 0)
-    total = 0
-    completed = 0
-    for line in lines:
-        if line.strip().startswith("- [ ]"):
-            total += 1
-        elif line.strip().lower().startswith("- [x]"):
-            completed += 1
-    return completed, total
 
 def get_diary_preview(date_str: str) -> str:
     file_path = DIARY_DIR / f"{date_str}.md"
@@ -442,7 +510,7 @@ def draw_preview(stdscr, lines, start_y, start_x, height, width, scroll):
             pass
 
 # ---------------------------------------------------------------------
-# DIARY TUI CLASS (with Command Palette)
+# DIARY TUI CLASS (COMBINED FUNCTIONALITY)
 # ---------------------------------------------------------------------
 class DiaryTUI:
     def __init__(self, stdscr):
@@ -450,7 +518,7 @@ class DiaryTUI:
         curses.curs_set(0)
         curses.start_color()
         curses.use_default_colors()
-        # Color pairs
+        # Initialize color pairs
         curses.init_pair(1, curses.COLOR_CYAN, -1)
         curses.init_pair(2, -1, curses.COLOR_CYAN)
         curses.init_pair(3, curses.COLOR_GREEN, -1)
@@ -474,17 +542,24 @@ class DiaryTUI:
         self.nvim_path = shutil.which("nvim")
         self.tmux_path = shutil.which("tmux")
         self.fallback_editor = shutil.which("vi") or shutil.which("nano")
-        self.tasks_cache = {}
-        self.task_pane_focused = False
-        self.timeblock_pane_focused = False
-        self.preview_pane_focused = False # Not focusable by '0' anymore
+        self.tasks_list = []  # list of task dicts from the index
         self.selected_task_index = 0
         self.selected_timeblock_index = 0
-        self.show_tasks = True # In side-by-side, show tasks by default, else timeblock
-        self.non_side_by_side_mode = "timeblock"  # "preview", "tasks", "timeblock"
+        self.show_tasks = True  # in side-by-side mode, show tasks pane by default
+        self.non_side_by_side_mode = "timeblock"  # can be "preview", "tasks", or "timeblock"
         self.calendar_height_non_side = 0
         self.calendar_height_side = 0
         self.refresh_timer = None
+        # Focus flags for panes
+        self.task_pane_focused = False
+        self.timeblock_pane_focused = False
+        self.preview_pane_focused = False
+        self.task_filter = "open"  # filter for tasks: "open", "in-progress", "done"
+
+    def get_week_start(self) -> datetime:
+        # Compute the week start (Sunday) for the selected date.
+        delta = (self.selected_date.weekday() + 1) % 7
+        return self.selected_date - timedelta(days=delta)
 
     def run(self):
         self.start_refresh_thread()
@@ -518,14 +593,11 @@ class DiaryTUI:
                     self.draw_tasks_pane_full(height, width)
                 elif self.non_side_by_side_mode == "timeblock":
                     self.draw_timeblock_pane_full(height, width)
-            # Draw status bar (second to last line)
             self.display_status_bar(height, width)
-            # Draw footer (last line)
             self.display_footer(height, width)
             self.stdscr.refresh()
             key = self.stdscr.getch()
-            # Ctrl+P (ASCII 16) launches the command palette
-            if key == 16:
+            if key == 16:  # Ctrl+P: command palette
                 self.show_command_palette(height, width)
             elif not self.handle_input(key, height, width, file_path, date_str):
                 break
@@ -540,13 +612,8 @@ class DiaryTUI:
             pass
 
     def display_status_bar(self, height, width):
-        """Displays a dynamic status bar on the second-to-last line."""
-        # Compute weekly stats
         week_start = self.get_week_start()
         stats = calculate_week_stats_from_date(week_start)
-        # Get tasks info
-        comp, tot = parse_tasks(TASKS_FILE)
-        # Determine focus
         if self.is_side_by_side:
             if self.task_pane_focused:
                 focus = "Tasks"
@@ -561,18 +628,14 @@ class DiaryTUI:
                 focus = "Timeblock"
             else:
                 focus = "Preview"
-        status_text = (f" Date: {self.selected_date.strftime('%Y-%m-%d')} |  "
-                       f"Tasks: {comp}/{tot} | Pomodoros: {stats['total_pomodoros']} | "
+        status_text = (f" Date: {self.selected_date.strftime('%Y-%m-%d')} | "
+                       f"Pomodoros: {stats['total_pomodoros']} | "
                        f"Workouts: {stats['total_workouts']} | Meditated: {stats['days_meditated']} | "
                        f"Focus: {focus} | View: {self.current_view} ")
+        if focus == "Tasks":
+            status_text += f"| Task Filter: {self.task_filter} "
         try:
             self.stdscr.addnstr(0, 0, status_text.ljust(width), width, curses.A_REVERSE)
-        except curses.error:
-            pass
-    def display_minimum_size_warning(self, height, width):
-        warning = "Terminal too small. Resize or press 'q' to quit."
-        try:
-            self.stdscr.addnstr(height // 2, max(0, (width - len(warning)) // 2), warning, len(warning), curses.A_BOLD)
         except curses.error:
             pass
 
@@ -637,19 +700,28 @@ class DiaryTUI:
         preview_x = 2
         draw_preview(self.stdscr, lines, preview_y, preview_x, height, width, self.preview_scroll)
 
+    def read_tasks_cache(self):
+        self.tasks_list = get_filtered_tasks(self.task_filter)
+
     def draw_tasks_pane(self, height, width):
         tasks_y = self.calendar_height_side + 3
         tasks_x = 2
         available_height = height - tasks_y - 1
         available_width = (width // 2) - 4
         self.read_tasks_cache()
-        if self.tasks_cache.get("lines"):
-            for idx, line in enumerate(self.tasks_cache["lines"][self.preview_scroll:self.preview_scroll + available_height]):
-                attr = curses.color_pair(6) | curses.A_BOLD if (self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index) else curses.A_NORMAL
-                try:
-                    self.stdscr.addnstr(tasks_y + idx, tasks_x, line, available_width, attr)
-                except curses.error:
-                    pass
+        tasks_lines = []
+        for task in self.tasks_list:
+            status = task.get("status", "open")
+            mark = "[x]" if status == "done" else ("[~]" if status == "in-progress" else "[ ]")
+            title = task.get("title", "Untitled")
+            due = task.get("due", "")
+            tasks_lines.append(f"- {mark} {title} (Due: {due})")
+        for idx, line in enumerate(tasks_lines[self.preview_scroll:self.preview_scroll + available_height]):
+            attr = curses.color_pair(6) | curses.A_BOLD if (self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index) else curses.A_NORMAL
+            try:
+                self.stdscr.addnstr(tasks_y + idx, tasks_x, line, available_width, attr)
+            except curses.error:
+                pass
 
     def draw_tasks_pane_full(self, height, width):
         tasks_y = self.calendar_height_non_side + 3
@@ -657,13 +729,19 @@ class DiaryTUI:
         available_height = height - tasks_y - 3
         available_width = width - 4
         self.read_tasks_cache()
-        if self.tasks_cache.get("lines"):
-            for idx, line in enumerate(self.tasks_cache["lines"][self.preview_scroll:self.preview_scroll + available_height]):
-                attr = curses.color_pair(6) | curses.A_BOLD if (self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index) else curses.A_NORMAL
-                try:
-                    self.stdscr.addnstr(tasks_y + idx, tasks_x, line, available_width, attr)
-                except curses.error:
-                    pass
+        tasks_lines = []
+        for task in self.tasks_list:
+            status = task.get("status", "open")
+            mark = "[x]" if status == "done" else ("[~]" if status == "in-progress" else "[ ]")
+            title = task.get("title", "Untitled")
+            due = task.get("due", "")
+            tasks_lines.append(f"- {mark} {title} (Due: {due})")
+        for idx, line in enumerate(tasks_lines[self.preview_scroll:self.preview_scroll + available_height]):
+            attr = curses.color_pair(6) | curses.A_BOLD if (self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index) else curses.A_NORMAL
+            try:
+                self.stdscr.addnstr(tasks_y + idx, tasks_x, line, available_width, attr)
+            except curses.error:
+                pass
 
     def draw_timeblock_pane(self, height, width):
         tb_y = self.calendar_height_side + 3
@@ -733,20 +811,6 @@ class DiaryTUI:
             except curses.error:
                 pass
 
-    def read_tasks_cache(self):
-        mod_time = TASKS_FILE.stat().st_mtime if TASKS_FILE.exists() else 0
-        if self.tasks_cache.get("file_mod") != mod_time:
-            tasks = []
-            try:
-                with TASKS_FILE.open("r", encoding="utf-8") as f:
-                    for line in f:
-                        if line.strip().startswith("- [ ]") or line.strip().startswith("- [x]"):
-                            tasks.append(line.rstrip())
-            except Exception as e:
-                logging.error(f"Error reading tasks file: {e}")
-                tasks = []
-            self.tasks_cache = {"lines": tasks, "file_mod": mod_time}
-
     def display_footer(self, height, width):
         footer = "Press '?' for help."
         if self.search_results:
@@ -774,7 +838,6 @@ class DiaryTUI:
         if key == ord('q'):
             return False
         elif key == curses.KEY_RESIZE:
-            self.tasks_cache = {}
             return True
         elif key == curses.KEY_MOUSE:
             self.handle_mouse()
@@ -822,8 +885,8 @@ class DiaryTUI:
             self.edit_entry(file_path)
         elif key == ord('a'):
             self.add_note(file_path, date_str)
-        elif key == ord('A'):
-            self.add_task()
+        elif key == ord('C'):
+            self.create_new_task()
         elif key == ord('T'):
             add_default_timeblock(file_path)
         elif key == ord('t'):
@@ -838,28 +901,36 @@ class DiaryTUI:
             self.scroll_preview(key)
         elif key == ord('0'):
             self.toggle_focus()
-        elif key == ord('1'): # Timeblock view
+        elif key == ord('1'):
             self.non_side_by_side_mode = "timeblock"
             if self.is_side_by_side:
                 self.show_tasks = False
                 self.task_pane_focused = False
                 self.timeblock_pane_focused = True
-        elif key == ord('2'): # Tasks view
+        elif key == ord('2'):
             self.non_side_by_side_mode = "tasks"
             if self.is_side_by_side:
                 self.show_tasks = True
                 self.task_pane_focused = True
                 self.timeblock_pane_focused = False
-        elif key == ord('3'): # Preview view (only fullscreen)
+        elif key == ord('3'):
             if not self.is_side_by_side:
                 self.non_side_by_side_mode = "preview"
+        # In tasks view, Enter toggles task status
         elif key in (10, 13) and self.task_pane_focused:
             self.toggle_task()
+        # In timeblock view, Enter adds an entry for the selected time block
         elif key in (10, 13) and self.timeblock_pane_focused:
             tb = timeblock_cache.get_timeblock(file_path)
             if 0 <= self.selected_timeblock_index < len(tb):
                 t_sel, _ = tb[self.selected_timeblock_index]
                 self.add_timeblock_entry(file_path, date_str, t_sel)
+        # New keybind: 'O' opens the selected task in the editor
+        elif key == ord('O') and self.task_pane_focused:
+            self.open_selected_task()
+        # New keybind: 'R' cycles the task filter (only in tasks view)
+        elif key == ord('R') and self.non_side_by_side_mode == "tasks":
+            self.cycle_task_filter()
         return True
 
     def handle_mouse(self):
@@ -881,9 +952,8 @@ class DiaryTUI:
         self.preview_scroll = 0
 
     def move_task_selection(self, delta: int):
-        if not self.tasks_cache.get("lines"):
-            return
-        max_idx = len(self.tasks_cache["lines"]) - 1
+        self.read_tasks_cache()
+        max_idx = len(self.tasks_list) - 1
         self.selected_task_index = max(0, min(self.selected_task_index + delta, max_idx))
 
     def move_timeblock_selection(self, delta: int):
@@ -984,22 +1054,65 @@ class DiaryTUI:
         finally:
             curses.noecho()
 
-    def add_task(self):
+    def create_new_task(self):
+        curses.echo()
         try:
-            curses.echo()
-            self.stdscr.addstr(0, 2, "Enter task: ")
+            self.stdscr.addstr(0, 2, "Task Title: ")
             self.stdscr.clrtoeol()
-            task = self.stdscr.getstr(0, 14, 100).decode("utf-8").strip()
+            title = self.stdscr.getstr(0, 14, 100).decode("utf-8").strip()
+            if not title:
+                return
+            self.stdscr.addstr(1, 2, "Due Date (YYYY-MM-DD) [optional]: ")
+            self.stdscr.clrtoeol()
+            due = self.stdscr.getstr(1, 38, 20).decode("utf-8").strip()
+            self.stdscr.addstr(2, 2, "Priority (low, normal, high) [normal]: ")
+            self.stdscr.clrtoeol()
+            priority = self.stdscr.getstr(2, 44, 10).decode("utf-8").strip() or "normal"
             curses.noecho()
-            if task:
-                with TASKS_FILE.open("a", encoding="utf-8") as f:
-                    f.write(f"- [ ] {task}\n")
-            self.read_tasks_cache()
-            return True, "Task added successfully."
+            created = create_task_note(title, due if due else None, priority)
+            if created:
+                self.display_error("Task created successfully.")
+            else:
+                self.display_error("Failed to create task.")
         except Exception as e:
-            logging.error(f"Add task error: {e}")
+            logging.error(f"Create task error: {e}")
         finally:
             curses.noecho()
+
+    def toggle_task(self):
+        self.read_tasks_cache()
+        if not self.tasks_list:
+            return
+        if 0 <= self.selected_task_index < len(self.tasks_list):
+            task = self.tasks_list[self.selected_task_index]
+            filename_prefix = task.get("zettelid")
+            for file in NOTES_DIR.glob(f"{filename_prefix}*.md"):
+                if file.is_file():
+                    toggle_task_status(file)
+                    break
+            self.read_tasks_cache()
+
+    def open_selected_task(self):
+        self.read_tasks_cache()
+        if not self.tasks_list:
+            return
+        if 0 <= self.selected_task_index < len(self.tasks_list):
+            task = self.tasks_list[self.selected_task_index]
+            filename_prefix = task.get("zettelid")
+            for file in NOTES_DIR.glob(f"{filename_prefix}*.md"):
+                if file.is_file():
+                    self.open_file_in_editor(file)
+                    break
+
+    def cycle_task_filter(self):
+        order = ["open", "in-progress", "done"]
+        try:
+            idx = order.index(self.task_filter)
+            self.task_filter = order[(idx + 1) % len(order)]
+        except ValueError:
+            self.task_filter = "open"
+        self.selected_task_index = 0
+        self.preview_scroll = 0
 
     def add_timeblock_entry(self, file_path: Path, date_str: str, selected_time: str):
         try:
@@ -1064,11 +1177,11 @@ class DiaryTUI:
             "  m/w/y    : Switch to Month/Week/Year view",
             "  o        : Toggle side-by-side layout",
             "  a        : Add note",
-            "  A        : Add task",
+            "  C        : Create New Task",
             "  T        : Add empty timeblock template",
-            "  e        : Edit entry",
+            "  e        : Edit diary entry",
             "  t        : Jump to today",
-            "  /        : Search",
+            "  /        : Search diary",
             "  n/p      : Navigate search results",
             "  f        : Filter by tag",
             "  M/W/P/I  : Toggle metadata (meditate/workout/pomodoros/important)",
@@ -1077,6 +1190,9 @@ class DiaryTUI:
             "  1        : Show Timeblock view",
             "  2        : Show Tasks view",
             "  3        : Show Preview view (fullscreen only)",
+            "  R        : Cycle task filter (open -> in-progress -> done)",
+            "  O        : Open selected task in editor",
+            "  Enter    : In Tasks view, cycle selected task status",
             "  Ctrl+P   : Command Palette",
             "  q        : Quit",
             "",
@@ -1126,85 +1242,6 @@ class DiaryTUI:
             elif self.non_side_by_side_mode == "timeblock":
                 self.timeblock_pane_focused = not self.timeblock_pane_focused
                 self.task_pane_focused = False
-            # Preview pane is never focused by '0' in fullscreen mode
-
-    def toggle_task(self):
-        if not self.task_pane_focused or not self.tasks_cache.get("lines"):
-            return
-        idx = self.selected_task_index
-        task_line = self.tasks_cache["lines"][idx]
-        if task_line.startswith("- [ ]"):
-            new_line = "- [x]" + task_line[5:]
-        elif task_line.startswith("- [x]"):
-            new_line = "- [ ]" + task_line[5:]
-        else:
-            return
-        self.tasks_cache["lines"][idx] = new_line
-        try:
-            with TASKS_FILE.open("r", encoding="utf-8") as f:
-                all_lines = f.readlines()
-            task_idx = 0
-            new_all = []
-            for line in all_lines:
-                if line.strip().startswith("- [ ]") or line.strip().startswith("- [x]"):
-                    if task_idx == idx:
-                        new_all.append(new_line + "\n")
-                    else:
-                        new_all.append(line)
-                    task_idx += 1
-                else:
-                    new_all.append(line)
-            with TASKS_FILE.open("w", encoding="utf-8") as f:
-                f.writelines(new_all)
-        except Exception as e:
-            logging.error(f"Toggle task error: {e}")
-
-    def show_week_stats(self, height, width):
-        week_start = self.get_week_start()
-        stats = calculate_week_stats_from_date(week_start)
-        popup_w, popup_h = 50, 10
-        start_y, start_x = (height - popup_h) // 2, (width - popup_w) // 2
-        win = curses.newwin(popup_h, popup_w, start_y, start_x)
-        win.border()
-        try:
-            win.addstr(0, (popup_w - len(" Weekly Statistics ")) // 2, " Weekly Statistics ", curses.A_BOLD)
-        except curses.error:
-            pass
-        lines = [
-            f"Week: {stats['week_start']} to {stats['week_end']}",
-            "",
-            f"Total Pomodoros: {stats['total_pomodoros']}",
-            f"Total Workouts : {stats['total_workouts']}",
-            f"Days Meditated : {stats['days_meditated']}",
-            "",
-            "Press any key..."
-        ]
-        for idx, line in enumerate(lines, start=1):
-            try:
-                win.addstr(idx, 2, line)
-            except curses.error:
-                pass
-        win.refresh()
-        win.getch()
-        del win
-
-    def get_week_start(self) -> datetime:
-        delta = (self.selected_date.weekday() + 1) % 7
-        return self.selected_date - timedelta(days=delta)
-
-    def display_error(self, message: str):
-        height, width = self.stdscr.getmaxyx()
-        popup_h, popup_w = 5, min(width - 4, len(message) + 4)
-        start_y, start_x = (height - popup_h) // 2, (width - popup_w) // 2
-        win = curses.newwin(popup_h, popup_w, start_y, start_x)
-        win.border()
-        try:
-            win.addstr(1, 2, message, curses.A_BOLD)
-        except curses.error:
-            pass
-        win.refresh()
-        win.getch()
-        del win
 
     def start_refresh_thread(self):
         self.stop_refresh_thread()
@@ -1251,18 +1288,12 @@ class DiaryTUI:
     # COMMAND PALETTE
     # -----------------------------------------------------------------
     def show_command_palette(self, height, width):
-        """
-        Displays a command palette overlay (triggered by Ctrl+P) that
-        allows the user to choose from a list of context-aware commands.
-        """
-        # Define commands as a list of tuples: (display text, function to call)
-        # Many commands are implemented as lambdas using the current date entry.
         current_file = DIARY_DIR / f"{self.selected_date.strftime('%Y-%m-%d')}.md"
         commands = [
             ("Jump to Today", self.jump_to_today),
             ("Add Note", lambda: self.add_note(current_file, self.selected_date.strftime("%Y-%m-%d"))),
-            ("Add Task", self.add_task),
-            ("Edit Entry", lambda: self.edit_entry(current_file)),
+            ("Create New Task", self.create_new_task),
+            ("Edit Diary Entry", lambda: self.edit_entry(current_file)),
             ("Toggle Meditate", lambda: self.toggle_metadata(ord('M'), current_file)),
             ("Toggle Workout", lambda: self.toggle_metadata(ord('W'), current_file)),
             ("Increment Pomodoros", lambda: self.toggle_metadata(ord('P'), current_file)),
@@ -1272,12 +1303,10 @@ class DiaryTUI:
             ("Switch to Year View", lambda: setattr(self, 'current_view', 'year')),
             ("Toggle Side-by-Side Layout", lambda: setattr(self, 'is_side_by_side', not self.is_side_by_side)),
             ("Open Home File", lambda: self.open_file_in_editor(HOME_FILE)),
-            ("Open Tasks File", lambda: self.open_file_in_editor(TASKS_FILE)),
             ("Search Diary", lambda: self.perform_search(height, width)),
             ("Filter by Tag", lambda: self.perform_tag_filter(height, width)),
             ("List Links", lambda: self.list_links(height, width, current_file))
         ]
-        # Create a palette window
         palette_h = min(len(commands) + 4, height - 4)
         palette_w = min(60, width - 4)
         start_y = max(0, (height - palette_h) // 2)
@@ -1305,10 +1334,8 @@ class DiaryTUI:
             elif key in (curses.KEY_DOWN, ord('j')):
                 selected = (selected + 1) % len(commands)
             elif key in (curses.KEY_ENTER, 10, 13):
-                # Execute the selected command
                 win.clear()
                 win.refresh()
-                # Execute the function
                 try:
                     commands[selected][1]()
                 except Exception as e:
@@ -1316,7 +1343,6 @@ class DiaryTUI:
                 break
             elif key in (27, ord('q')):
                 break
-        # Clear the palette window
         win.clear()
         self.stdscr.touchwin()
         self.stdscr.refresh()
