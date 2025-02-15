@@ -375,8 +375,7 @@ def create_task_note(task_title, due=None, priority="normal", extra_tags=None):
         "---\n" +
         yaml.dump(frontmatter, sort_keys=False) +
         "---\n\n" +
-        f"# {task_title}\n\n" +
-        "*Details:*  \nUpdate task details here...\n"
+        f"# {task_title}\n\n"
     )
     try:
         with file_path.open("w", encoding="utf-8") as f:
