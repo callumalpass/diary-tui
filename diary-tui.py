@@ -1144,20 +1144,20 @@ class DiaryTUI:
     def create_new_task(self):
         curses.echo()
         try:
-            self.stdscr.addstr(0, 2, "Task Title: ")
+            self.stdscr.addstr(0, 1, "Task Title: ")
             self.stdscr.clrtoeol()
             title = self.stdscr.getstr(0, 14, 100).decode("utf-8").strip()
             if not title:
                 return
-            self.stdscr.addstr(1, 2, "Due Date (YYYY-MM-DD) [optional]: ")
+            self.stdscr.addstr(0, 1, "Due Date (YYYY-MM-DD) [optional]: ")
             self.stdscr.clrtoeol()
-            due = self.stdscr.getstr(1, 38, 20).decode("utf-8").strip()
-            self.stdscr.addstr(2, 2, "Priority (low, normal, high) [normal]: ")
+            due = self.stdscr.getstr(0, 38, 20).decode("utf-8").strip()
+            self.stdscr.addstr(0, 1, "Priority (low, normal, high) [normal]: ")
             self.stdscr.clrtoeol()
-            priority = self.stdscr.getstr(2, 44, 10).decode("utf-8").strip() or "normal"
-            self.stdscr.addstr(3, 2, "Extra Tags (comma separated) [optional]: ")
+            priority = self.stdscr.getstr(0, 44, 10).decode("utf-8").strip() or "normal"
+            self.stdscr.addstr(0, 1, "Extra Tags (comma separated) [optional]: ")
             self.stdscr.clrtoeol()
-            tags_input = self.stdscr.getstr(3, 40, 50).decode("utf-8").strip()
+            tags_input = self.stdscr.getstr(0, 40, 50).decode("utf-8").strip()
             extra_tags = [tag.strip() for tag in tags_input.split(',') if tag.strip()] if tags_input else []
             curses.noecho()
             created = self.task_manager.create_task(title, due if due else None, priority, extra_tags)
