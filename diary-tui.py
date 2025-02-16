@@ -51,10 +51,8 @@ import sys
 import logging
 import random
 import string
-import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from collections import defaultdict
 import hashlib
 
 # ---------------------------------------------------------------------
@@ -728,14 +726,14 @@ class DiaryTUI:
         self.tmux_path = shutil.which("tmux")
         self.fallback_editor = shutil.which("vi") or shutil.which("nano")
         # Tasks related attributes
-        self.task_filter = "open"  # can be open, in-progress, done, "all", or "archive"
+        self.task_filter = "all"  # can be open, in-progress, done, "all", or "archive"
         self.context_filter = None # New context filter
         self.task_manager = TaskManager(NOTES_DIR)
         self.tasks_list = []  # list of task dicts from the index (will include effective status for recurring tasks)
         self.selected_task_index = 0
-        self.selected_timeblock_index = 0
+        self.selected_timeblock_index = 1
         self.show_tasks = True  # in side-by-side mode, show tasks pane by default
-        self.non_side_by_side_mode = "timeblock"  # can be "preview", "tasks", or "timeblock"
+        self.non_side_by_side_mode = "tasks"  # can be "preview", "tasks", or "timeblock"
         self.calendar_height_non_side = 0
         self.calendar_height_side = 0
         self.refresh_timer = None
@@ -931,7 +929,7 @@ class DiaryTUI:
             is_archived = isinstance(task.get("tags"), list) and "archive" in task.get("tags")
             attr = curses.A_NORMAL
             if is_archived:
-                attr |= curses.A_DIM # Dim archived tasks in archive view if needed
+                attr |= curses.color_pair(8) # Dim archived tasks in archive view if needed
             if priority == "high":
                 attr |= curses.color_pair(5)
             elif priority == "low":
@@ -946,8 +944,8 @@ class DiaryTUI:
                         prefix = " !!!"
                 except Exception:
                     pass
-            if effective_status == "in-progress":
-                attr |= curses.A_BOLD
+            # if effective_status == "in-progress":
+            #     attr |= curses.A_BOLD
             line = f"- {mark}{prefix} {title}"
             if self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index:
                 attr |= curses.A_REVERSE
@@ -992,8 +990,8 @@ class DiaryTUI:
                         prefix = " !!!"
                 except Exception:
                     pass
-            if effective_status == "in-progress":
-                attr |= curses.A_BOLD
+            # if effective_status == "in-progress":
+            #     attr |= curses.A_BOLD
             line = f"- {mark}{prefix} {title}"
             if self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index:
                 attr |= curses.A_REVERSE
@@ -1116,7 +1114,7 @@ class DiaryTUI:
             self.timeblock_pane_focused = False
             self.preview_pane_focused = False
             self.selected_task_index = 0
-            self.selected_timeblock_index = 0
+            self.selected_timeblock_index = 1
             self.non_side_by_side_mode = "timeblock"
         elif key in (ord('h'), curses.KEY_LEFT):
             self.move_day(-1)
@@ -1229,7 +1227,7 @@ class DiaryTUI:
         if not tb:
             return
         max_idx = len(tb) - 1
-        self.selected_timeblock_index = max(0, min(self.selected_timeblock_index + delta, max_idx))
+        self.selected_timeblock_index = max(1, min(self.selected_timeblock_index + delta, max_idx))
 
     def perform_search(self, height, width):
         curses.echo()
