@@ -708,6 +708,7 @@ class DiaryTUI:
         self.task_pane_focused = False
         self.timeblock_pane_focused = False
         self.preview_pane_focused = False
+        self.task_creation_form_active = False # Flag to indicate if task creation form is active
 
     def get_week_start(self) -> datetime:
         delta = (self.selected_date.weekday() + 1) % 7
@@ -748,11 +749,18 @@ class DiaryTUI:
             self.display_status_bar(height, width)
             self.display_footer(height, width)
             self.stdscr.refresh()
-            key = self.stdscr.getch()
-            if key == 16:  # Ctrl+P: command palette
-                self.show_command_palette(height, width)
-            elif not self.handle_input(key, height, width, file_path, date_str):
-                break
+            if self.task_creation_form_active:
+                key = self.handle_task_creation_form_input()
+                if key == 'TASK_CREATED':
+                    self.task_creation_form_active = False
+                elif key == 'TASK_CANCELLED':
+                    self.task_creation_form_active = False
+            else:
+                key = self.stdscr.getch()
+                if key == 16:  # Ctrl+P: command palette
+                    self.show_command_palette(height, width)
+                elif not self.handle_input(key, height, width, file_path, date_str):
+                    break
         self.stop_refresh_thread()
 
     def display_minimum_size_warning(self, height, width):
@@ -894,9 +902,12 @@ class DiaryTUI:
                 try:
                     due_date = datetime.strptime(due, "%Y-%m-%d")
                     if due_date < datetime.today() and effective_status != "done":
-                        attr = curses.color_pair(9) | curses.A_BOLD
+                        attr |= curses.A_BOLD
+                        prefix = " !!!"
                 except Exception:
                     pass
+            if effective_status == "in-progress":
+                attr |= curses.A_BOLD
             line = f"- {mark}{prefix} {title}"
             if self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index:
                 attr |= curses.A_REVERSE
@@ -934,9 +945,12 @@ class DiaryTUI:
                 try:
                     due_date = datetime.strptime(due, "%Y-%m-%d")
                     if due_date < datetime.today() and effective_status != "done":
-                        attr = curses.color_pair(9) | curses.A_BOLD
+                        attr |= curses.A_BOLD
+                        prefix = " !!!"
                 except Exception:
                     pass
+            if effective_status == "in-progress":
+                attr |= curses.A_BOLD
             line = f"- {mark}{prefix} {title}"
             if self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index:
                 attr |= curses.A_REVERSE
@@ -1094,7 +1108,7 @@ class DiaryTUI:
         elif key == ord('a'):
             self.add_note(file_path, date_str)
         elif key == ord('C'):
-            self.create_new_task()
+            self.task_creation_form_active = True # Activate task creation form
         elif key == ord('T'):
             add_default_timeblock(file_path)
         elif key == ord('t'):
@@ -1107,7 +1121,7 @@ class DiaryTUI:
             self.show_help(height, width)
         elif key in (ord('u'), ord('d'), ord('U'), ord('D')):
             self.scroll_preview(key)
-        elif key == ord('0'):
+        elif key in (ord('0'), 9 ):
             self.toggle_focus()
         elif key == ord('1'):
             self.non_side_by_side_mode = "timeblock"
@@ -1279,56 +1293,160 @@ class DiaryTUI:
         finally:
             curses.noecho()
 
+    # -----------------------------------------------------------------
+    # TASK CREATION FORM IMPLEMENTATION
+    # -----------------------------------------------------------------
+    def show_task_creation_form(self, height, width):
+        form_height = 20
+        form_width = 70
+        start_y = max(0, (height - form_height) // 2)
+        start_x = max(0, (width - form_width) // 2)
+        form_win = curses.newwin(form_height, form_width, start_y, start_x)
+        draw_rectangle(form_win, 0, 0, form_height - 1, form_width - 1)
+        form_win.keypad(True)
+
+        fields = [
+            {"label": "Title", "type": "text", "value": ""},
+            {"label": "Due Date (YYYY-MM-DD)", "type": "text", "value": ""},
+            {"label": "Priority", "type": "dropdown", "options": ["low", "normal", "high"], "value": "normal"},
+            {"label": "Context Tags (comma-separated)", "type": "text", "value": ""},
+            {"label": "Extra Tags (comma-separated)", "type": "text", "value": ""},
+            {"label": "Recurrence Frequency", "type": "dropdown", "options": ["none", "daily", "weekly", "monthly", "yearly"], "value": "none"},
+            {"label": "Days of Week (for weekly, mon,tue,...)", "type": "checkboxes", "options": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "value": []},
+            {"label": "Day of Month (for monthly/yearly, 1-31)", "type": "text", "value": ""},
+        ]
+        current_field_index = 0
+        current_checkbox_index = 0 # Track checkbox selection within "Days of Week"
+
+        while True:
+            form_win.clear()
+            draw_rectangle(form_win, 0, 0, form_height - 1, form_width - 1)
+            title = " Create New Task "
+            try:
+                form_win.addstr(0, (form_width - len(title)) // 2, title, curses.A_BOLD)
+            except curses.error:
+                pass
+
+            y_offset = 2
+            for i, field in enumerate(fields):
+                label = field["label"]
+                value = field["value"]
+                form_win.addstr(y_offset + i, 2, f"{label}: ")
+                if field["type"] == "text":
+                    form_win.addnstr(y_offset + i, 2 + len(label) + 1, value, form_width - (4 + len(label) + 1), curses.A_REVERSE if i == current_field_index else curses.A_NORMAL)
+                elif field["type"] == "dropdown":
+                    options_str = ", ".join(field["options"])
+                    current_value_display = value
+                    form_win.addnstr(y_offset + i, 2 + len(label) + 1, current_value_display, form_width - (4 + len(label) + 1), curses.A_REVERSE if i == current_field_index else curses.A_NORMAL)
+                    if i == current_field_index:
+                         form_win.addstr(y_offset + i + 1, 4 + len(label), f"Options: [{options_str}]", curses.A_DIM)
+                elif field["type"] == "checkboxes":
+                    for j, option in enumerate(field["options"]):
+                        mark_char = "x" if option in value else " "
+                        checkbox_display = f"[{mark_char}]{option}"
+                        attr = curses.A_NORMAL
+                        if i == current_field_index and j == current_checkbox_index: # Highlight selected checkbox with brackets
+                            checkbox_display = f"[{checkbox_display}]" # Enclose in brackets for selection
+                        form_win.addstr(y_offset + i, 4 + j * 8, checkbox_display, attr)
+                    if i == current_field_index:
+                        form_win.addstr(y_offset + i + 1, 4 + len(label), f"Use Left/Right Arrows, Space to toggle", curses.A_DIM)
+
+            try:
+                form_win.addstr(form_height - 3, 4, "[Create Task]", curses.A_REVERSE if current_field_index == len(fields) else curses.A_NORMAL)
+                form_win.addstr(form_height - 3, 20, "[Cancel]", curses.A_REVERSE if current_field_index == len(fields)+1 else curses.A_NORMAL)
+            except curses.error:
+                pass
+
+            form_win.refresh()
+            key = form_win.getch()
+
+            if key == 9: # Tab
+                current_field_index = (current_field_index + 1) % (len(fields) + 2) # +2 for Create/Cancel buttons
+                if fields[current_field_index-1]["type"] == "checkboxes": # Reset checkbox index when leaving checkboxes
+                    current_checkbox_index = 0
+            elif key == curses.KEY_BTAB or key == 353: # Shift+Tab (some terminals send 353)
+                current_field_index = (current_field_index - 1) % (len(fields) + 2)
+                if fields[current_field_index]["type"] == "checkboxes": # Reset checkbox index when entering checkboxes
+                    current_checkbox_index = 0
+            elif key in (curses.KEY_ENTER, 10, 13):
+                if current_field_index == len(fields): # Create Task Button
+                    task_data = {f['label']: f['value'] for f in fields}
+                    recurrence_data = None
+                    if task_data['Recurrence Frequency'] != 'none':
+                        recurrence_data = {"frequency": task_data['Recurrence Frequency']}
+                        if recurrence_data['frequency'] == 'weekly':
+                            recurrence_data['days_of_week'] = task_data['Days of Week (for weekly, mon,tue,...)']
+                        elif recurrence_data['frequency'] in ('monthly', 'yearly'):
+                            if task_data['Day of Month (for monthly/yearly, 1-31)'].isdigit():
+                                recurrence_data['day_of_month'] = int(task_data['Day of Month (for monthly/yearly, 1-31)'])
+                            else:
+                                recurrence_data = None # Validation failed for day of month
+                                self.display_error("Invalid Day of Month. Task creation cancelled.")
+                                break # Exit form loop
+
+                    if recurrence_data is not None: # Only create if recurrence data is valid or None
+                        created = self.task_manager.create_task(
+                            title=task_data['Title'],
+                            due=task_data['Due Date (YYYY-MM-DD)'] if task_data['Due Date (YYYY-MM-DD)'] else None,
+                            priority=task_data['Priority'],
+                            extra_tags=[tag.strip() for tag in task_data['Extra Tags (comma-separated)'].split(',') if tag.strip()],
+                            contexts=[ctx.strip() for ctx in task_data['Context Tags (comma-separated)'].split(',') if ctx.strip()],
+                            recurrence_data=recurrence_data
+                        )
+                        if created:
+                            self.display_error("Task created successfully.")
+                        else:
+                            self.display_error("Failed to create task.")
+                    break # Exit form loop and return 'TASK_CREATED'
+
+                elif current_field_index == len(fields)+1: # Cancel Button
+                    break # Exit form loop and return 'TASK_CANCELLED'
+            elif key == 27: # Esc
+                break # Exit form loop and return 'TASK_CANCELLED'
+            elif 0 <= current_field_index < len(fields):
+                field = fields[current_field_index]
+                if field["type"] == "text":
+                    if key == curses.KEY_BACKSPACE or key == 127 or key == 8: # Backspace handling
+                        field["value"] = field["value"][:-1]
+                    elif 32 <= key <= 126: # Printable characters
+                        field["value"] += chr(key)
+                elif field["type"] == "dropdown":
+                    if key in (curses.KEY_DOWN, ord('j')):
+                        current_option_index = field["options"].index(field["value"])
+                        field["value"] = field["options"][(current_option_index + 1) % len(field["options"])]
+                    elif key in (curses.KEY_UP, ord('k')):
+                        current_option_index = field["options"].index(field["value"])
+                        field["value"] = field["options"][(current_option_index - 1) % len(field["options"])]
+                elif field["type"] == "checkboxes":
+                    if key in (curses.KEY_LEFT, ord('h')):
+                        current_checkbox_index = max(0, current_checkbox_index - 1) # Move checkbox index left
+                    elif key in (curses.KEY_RIGHT, ord('l')):
+                        current_checkbox_index = min(len(field["options"]) - 1, current_checkbox_index + 1) # Move checkbox index right
+                    elif key == ord(' '): # Spacebar to toggle checkbox
+                        option_to_toggle = field["options"][current_checkbox_index] # Toggle selected checkbox by index
+                        if option_to_toggle in field["value"]:
+                            field["value"].remove(option_to_toggle)
+                        else:
+                            field["value"].append(option_to_toggle)
+
+        form_win.clear()
+        form_win.refresh()
+        del form_win
+        if current_field_index == len(fields):
+            return 'TASK_CREATED'
+        else:
+            return 'TASK_CANCELLED'
+
+
+
+    def handle_task_creation_form_input(self):
+        height, width = self.stdscr.getmaxyx()
+        result = self.show_task_creation_form(height, width)
+        return result
+
+
     def create_new_task(self):
-        curses.echo()
-        try:
-            self.stdscr.addstr(0, 1, "Task Title: ")
-            self.stdscr.clrtoeol()
-            title = self.stdscr.getstr(0, 14, 100).decode("utf-8").strip()
-            if not title:
-                return
-            self.stdscr.addstr(0, 1, "Due Date (YYYY-MM-DD) [optional]: ")
-            self.stdscr.clrtoeol()
-            due = self.stdscr.getstr(0, 38, 20).decode("utf-8").strip()
-            self.stdscr.addstr(0, 1, "Priority (low, normal, high) [normal]: ")
-            self.stdscr.clrtoeol()
-            priority = self.stdscr.getstr(0, 44, 10).decode("utf-8").strip() or "normal"
-            self.stdscr.addstr(0, 1, "Extra Tags (comma separated) [optional]: ")
-            self.stdscr.clrtoeol()
-            tags_input = self.stdscr.getstr(0, 40, 50).decode("utf-8").strip()
-            extra_tags = [tag.strip() for tag in tags_input.split(',') if tag.strip()] if tags_input else []
-            # NEW: Prompt for recurrence rules.
-            self.stdscr.addstr(0, 1, "Recurrence frequency (none/daily/weekly/monthly/yearly): ")
-            self.stdscr.clrtoeol()
-            freq = self.stdscr.getstr(0, 50, 10).decode("utf-8").strip().lower()  # use column index "fifty"
-            recurrence = None
-            if freq and freq != "none":
-                recurrence = {"frequency": freq}
-                if freq == "weekly":
-                    self.stdscr.addstr(0, 1, "Days of week (e.g., mon,wed,fri): ")
-                    self.stdscr.clrtoeol()
-                    days_in = self.stdscr.getstr(0, 36, 20).decode("utf-8").strip()
-                    recurrence["days_of_week"] = [d.strip().lower() for d in days_in.split(",") if d.strip()]
-                elif freq in ("monthly", "yearly"):
-                    self.stdscr.addstr(0, 1, "Day of month (e.g., 15): ")
-                    self.stdscr.clrtoeol()
-                    dom_in = self.stdscr.getstr(0, 28, 5).decode("utf-8").strip()
-                    recurrence["day_of_month"] = int(dom_in) if dom_in.isdigit() else 1
-            # NEW: Prompt for context tags
-            self.stdscr.addstr(0, 1, "Context Tags (comma separated) [optional]: ") # New prompt for contexts
-            self.stdscr.clrtoeol()
-            contexts_input = self.stdscr.getstr(0, 42, 50).decode("utf-8").strip()
-            contexts = [c.strip() for c in contexts_input.split(',') if c.strip()] if contexts_input else [] # Parse contexts
-            curses.noecho()
-            created = self.task_manager.create_task(title, due if due else None, priority, extra_tags, recurrence, contexts) # Pass contexts to create_task
-            if created:
-                self.display_error("Task created successfully.")
-            else:
-                self.display_error("Failed to create task.")
-        except Exception as e:
-            logging.error(f"Create task error: {e}")
-        finally:
-            curses.noecho()
+        self.task_creation_form_active = True
 
     def toggle_task(self):
         self.read_tasks_cache()
@@ -1461,7 +1579,7 @@ class DiaryTUI:
             "  m/w/y    : Switch to Month/Week/Year view",
             "  o        : Toggle side-by-side layout",
             "  a        : Add note",
-            "  C        : Create New Task (with recurrence support)",
+            "  C        : Create New Task (Interactive Form)", # Updated help text
             "  T        : Add empty timeblock template",
             "  e        : Edit diary entry",
             "  t        : Jump to today",
@@ -1579,7 +1697,7 @@ class DiaryTUI:
         commands = [
             ("Jump to Today", self.jump_to_today),
             ("Add Note", lambda: self.add_note(current_file, self.selected_date.strftime("%Y-%m-%d"))),
-            ("Create New Task", self.create_new_task),
+            ("Create New Task (Interactive Form)", self.create_new_task), # Updated command palette entry
             ("Edit Diary Entry", lambda: self.edit_entry(current_file)),
             ("Toggle Meditate", lambda: self.toggle_metadata(ord('M'), current_file)),
             ("Toggle Workout", lambda: self.toggle_metadata(ord('W'), current_file)),
