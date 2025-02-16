@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CALENDAR/TIME-MANAGING/VIEWING SCRIPT (with TASK NOTES & RECURRING TASK MANAGEMENT)
+CALENDAR/TIME-MANAGING/VIEWING SCRIPT (with TASK NOTES & RECURRING TASK MANAGEMENT & CONTEXT TAGS)
 
 Features:
   - Daily diary entries with YAML frontmatter metadata.
@@ -26,6 +26,10 @@ Features:
       • Completed instances are tracked in a new “complete_instances” list (YYYY-MM-DD).
       • When toggled (Enter key), a recurring task’s “today” instance is marked
         complete (or undone) without affecting future recurrences.
+  - TASK CONTEXTS/TAGS:
+      • Tasks can now be tagged with contexts in a new YAML "contexts" section (list of strings).
+      • Filter tasks by context tag using a new keybind ('c').
+      • Context tags are displayed in the task list.
 
 Dependencies: curses, yaml, json
 """
@@ -346,7 +350,7 @@ def add_default_timeblock(file_path: Path):
         return False
 
 # ---------------------------------------------------------------------
-# TASKS & INDEX FUNCTIONS (Revised to implement recurrence)
+# TASKS & INDEX FUNCTIONS (Revised to implement recurrence and contexts)
 # ---------------------------------------------------------------------
 def generate_task_filename():
     date_prefix = datetime.now().strftime("%y%m%d")
@@ -454,16 +458,18 @@ class TaskManager:
         tasks.sort(key=sort_key)
         self.tasks = tasks
 
-    def filter_tasks(self, status_filter: str, current_date: datetime):
+    def filter_tasks(self, status_filter: str, current_date: datetime, context_filter: str = None):
         # status_filter can be "open", "in-progress", "done" or "all"
         filtered = []
         for t in self.tasks:
             effective_status = self.get_effective_status(t, current_date)
-            if status_filter == "all" or effective_status == status_filter or t.get("status", "open") == status_filter:
+            status_match = (status_filter == "all" or effective_status == status_filter or t.get("status", "open") == status_filter)
+            context_match = (context_filter is None or (isinstance(t.get("contexts"), list) and context_filter.lower() in [c.lower() for c in t.get("contexts", [])]))
+            if status_match and context_match:
                 filtered.append(t)
         return filtered
 
-    def create_task(self, title, due=None, priority="normal", extra_tags=None, recurrence_data: dict = None):
+    def create_task(self, title, due=None, priority="normal", extra_tags=None, recurrence_data: dict = None, contexts=None):
         filename = generate_task_filename()
         zettelid = filename[:-3]  # without .md
         file_path = NOTES_DIR / filename
@@ -478,7 +484,8 @@ class TaskManager:
             "status": "open",
             "due": due,
             "tags": ["task"] + (extra_tags if extra_tags else []),
-            "priority": priority
+            "priority": priority,
+            "contexts": contexts if contexts else [] # Added contexts here
         }
         if recurrence_data:
             frontmatter["recurrence"] = recurrence_data
@@ -653,7 +660,7 @@ def draw_preview(stdscr, lines, start_y, start_x, height, width, scroll):
             pass
 
 # ---------------------------------------------------------------------
-# DIARY TUI CLASS (with combined functionality including recurring tasks)
+# DIARY TUI CLASS (with combined functionality including recurring tasks and contexts)
 # ---------------------------------------------------------------------
 class DiaryTUI:
     def __init__(self, stdscr):
@@ -687,6 +694,7 @@ class DiaryTUI:
         self.fallback_editor = shutil.which("vi") or shutil.which("nano")
         # Tasks related attributes
         self.task_filter = "open"  # can be open, in-progress, done, or "all"
+        self.context_filter = None # New context filter
         self.task_manager = TaskManager(NOTES_DIR)
         self.tasks_list = []  # list of task dicts from the index (will include effective status for recurring tasks)
         self.selected_task_index = 0
@@ -778,6 +786,8 @@ class DiaryTUI:
                        f"Focus: {focus} | View: {self.current_view} ")
         if focus == "Tasks":
             status_text += f"| Task Filter: {self.task_filter} "
+            if self.context_filter:
+                status_text += f"| Context Filter: {self.context_filter} " # Show context filter in status bar
         try:
             self.stdscr.addnstr(0, 0, status_text.ljust(width), width, curses.A_REVERSE)
         except curses.error:
@@ -845,9 +855,9 @@ class DiaryTUI:
         draw_preview(self.stdscr, lines, preview_y, preview_x, height, width, self.preview_scroll)
 
     def read_tasks_cache(self):
-        # Reload tasks using selected_date for recurrence checking.
+        # Reload tasks using selected_date for recurrence checking and apply filters.
         self.task_manager.load_tasks(self.selected_date)
-        self.tasks_list = self.task_manager.filter_tasks(self.task_filter, self.selected_date)
+        self.tasks_list = self.task_manager.filter_tasks(self.task_filter, self.selected_date, self.context_filter) # Apply context filter
 
     def display_error(self, msg):
         height, width = self.stdscr.getmaxyx()
@@ -872,6 +882,7 @@ class DiaryTUI:
             title = task.get("title", "Untitled")
             due = task.get("due", "")
             priority = task.get("priority", "normal")
+            contexts = task.get("contexts", []) # Get contexts
             attr = curses.A_NORMAL
             if priority == "high":
                 attr |= curses.color_pair(5)
@@ -891,6 +902,8 @@ class DiaryTUI:
                 attr |= curses.A_REVERSE
             if due:
                 line += f" (Due: {due})"
+            if contexts: # Display contexts if present
+                line += f" ({', '.join(contexts)})"
             try:
                 self.stdscr.addnstr(tasks_y + idx, tasks_x, line, available_width, attr)
             except curses.error:
@@ -909,6 +922,7 @@ class DiaryTUI:
             title = task.get("title", "Untitled")
             due = task.get("due", "")
             priority = task.get("priority", "normal")
+            contexts = task.get("contexts", []) # Get contexts
             attr = curses.A_NORMAL
             if priority == "high":
                 attr |= curses.color_pair(5)
@@ -928,6 +942,8 @@ class DiaryTUI:
                 attr |= curses.A_REVERSE
             if due:
                 line += f" (Due: {due})"
+            if contexts: # Display contexts if present
+                line += f" ({', '.join(contexts)})"
             try:
                 self.stdscr.addnstr(tasks_y + idx, tasks_x, line, available_width, attr)
             except curses.error:
@@ -1071,6 +1087,8 @@ class DiaryTUI:
             self.navigate_search(-1)
         elif key == ord('f'):
             self.perform_tag_filter(height, width)
+        elif key == ord('c'): # New key for context filter
+            self.perform_context_filter(height, width)
         elif key == ord('e'):
             self.edit_entry(file_path)
         elif key == ord('a'):
@@ -1201,6 +1219,23 @@ class DiaryTUI:
         self.tag_results = filter_by_tag(tag) if tag else set()
         self.preview_scroll = 0
 
+    def perform_context_filter(self, height, width): # Implement context filter
+        curses.echo()
+        try:
+            self.stdscr.addstr(height - 1, 2, "Filter by context tag: ")
+            self.stdscr.clrtoeol()
+            context_tag = self.stdscr.getstr(height - 1, 25, 50).decode("utf-8").strip()
+        except Exception as e:
+            logging.error(f"Context filter input error: {e}")
+            context_tag = ""
+        curses.noecho()
+        if context_tag:
+            self.context_filter = context_tag
+        else:
+            self.context_filter = None # Clear context filter if empty input
+        self.selected_task_index = 0 # Reset task selection
+        self.preview_scroll = 0
+
     def edit_entry(self, file_path: Path):
         if not file_path.exists():
             file_path.touch()
@@ -1279,8 +1314,13 @@ class DiaryTUI:
                     self.stdscr.clrtoeol()
                     dom_in = self.stdscr.getstr(0, 28, 5).decode("utf-8").strip()
                     recurrence["day_of_month"] = int(dom_in) if dom_in.isdigit() else 1
+            # NEW: Prompt for context tags
+            self.stdscr.addstr(0, 1, "Context Tags (comma separated) [optional]: ") # New prompt for contexts
+            self.stdscr.clrtoeol()
+            contexts_input = self.stdscr.getstr(0, 42, 50).decode("utf-8").strip()
+            contexts = [c.strip() for c in contexts_input.split(',') if c.strip()] if contexts_input else [] # Parse contexts
             curses.noecho()
-            created = self.task_manager.create_task(title, due if due else None, priority, extra_tags, recurrence)
+            created = self.task_manager.create_task(title, due if due else None, priority, extra_tags, recurrence, contexts) # Pass contexts to create_task
             if created:
                 self.display_error("Task created successfully.")
             else:
@@ -1428,6 +1468,7 @@ class DiaryTUI:
             "  /        : Search diary",
             "  n/p      : Navigate search results",
             "  f        : Filter by tag",
+            "  c        : Filter by context tag", # Added context filter to help
             "  M/W/P/I  : Toggle metadata (meditate/workout/pomodoros/important)",
             "  L        : List links",
             "  0        : Toggle focus between Tasks/Timeblock panes",
@@ -1551,6 +1592,7 @@ class DiaryTUI:
             ("Open Home File", lambda: self.open_file_in_editor(HOME_FILE)),
             ("Search Diary", lambda: self.perform_search(height, width)),
             ("Filter by Tag", lambda: self.perform_tag_filter(height, width)),
+            ("Filter by Context Tag", lambda: self.perform_context_filter(height, width)), # Added context filter to command palette
             ("List Links", lambda: self.list_links(height, width, current_file))
         ]
         palette_h = min(len(commands) + 4, height - 4)
