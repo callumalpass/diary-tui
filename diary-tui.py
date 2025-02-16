@@ -1306,7 +1306,7 @@ class DiaryTUI:
         form_win.keypad(True)
 
         fields = [
-            {"label": "Title", "type": "text", "value": ""},
+            {"label": "Title", "type": "text", "value": "Task title"},
             {"label": "Due Date (YYYY-MM-DD)", "type": "text", "value": ""},
             {"label": "Priority", "type": "dropdown", "options": ["low", "normal", "high"], "value": "normal"},
             {"label": "Context Tags (comma-separated)", "type": "text", "value": ""},
@@ -1362,11 +1362,11 @@ class DiaryTUI:
 
             if key == 9: # Tab
                 current_field_index = (current_field_index + 1) % (len(fields) + 2) # +2 for Create/Cancel buttons
-                if fields[current_field_index-1]["type"] == "checkboxes": # Reset checkbox index when leaving checkboxes
+                if 0 <= current_field_index - 1 < len(fields) and fields[current_field_index-1]["type"] == "checkboxes": # Reset checkbox index when leaving checkboxes
                     current_checkbox_index = 0
             elif key == curses.KEY_BTAB or key == 353: # Shift+Tab (some terminals send 353)
                 current_field_index = (current_field_index - 1) % (len(fields) + 2)
-                if fields[current_field_index]["type"] == "checkboxes": # Reset checkbox index when entering checkboxes
+                if 0 <= current_field_index < len(fields) and fields[current_field_index]["type"] == "checkboxes": # Reset checkbox index when entering checkboxes
                     current_checkbox_index = 0
             elif key in (curses.KEY_ENTER, 10, 13):
                 if current_field_index == len(fields): # Create Task Button
@@ -1375,7 +1375,7 @@ class DiaryTUI:
                     if task_data['Recurrence Frequency'] != 'none':
                         recurrence_data = {"frequency": task_data['Recurrence Frequency']}
                         if recurrence_data['frequency'] == 'weekly':
-                            recurrence_data['days_of_week'] = task_data['Days of Week (for weekly, mon,tue,...)']
+                            recurrence_data['days_of_week'] = task_data['Days of Week']
                         elif recurrence_data['frequency'] in ('monthly', 'yearly'):
                             if task_data['Day of Month (for monthly/yearly, 1-31)'].isdigit():
                                 recurrence_data['day_of_month'] = int(task_data['Day of Month (for monthly/yearly, 1-31)'])
@@ -1436,6 +1436,7 @@ class DiaryTUI:
             return 'TASK_CREATED'
         else:
             return 'TASK_CANCELLED'
+
 
 
 
