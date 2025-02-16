@@ -473,6 +473,8 @@ class TaskManager:
         filename = generate_task_filename()
         zettelid = filename[:-3]  # without .md
         file_path = NOTES_DIR / filename
+        logging.info(f"DEBUG: Generated filename: {filename}")  # DEBUG PRINT 1
+        logging.info(f"DEBUG: Constructed file_path: {file_path}") # DEBUG PRINT 2
         now_dt = datetime.now()
         now_str = now_dt.strftime("%Y-%m-%dT%H:%M:%S")
         today = now_dt.strftime("%Y-%m-%d")
@@ -496,12 +498,15 @@ class TaskManager:
             "---\n\n" +
             f"# {title}\n\n"
         )
+        logging.info(f"DEBUG: Attempting to open file for writing: {file_path}") # DEBUG PRINT 3
         try:
             with file_path.open("w", encoding="utf-8") as f:
                 f.write(content)
+            logging.info(f"DEBUG: File write successful: {file_path}") # DEBUG PRINT 4
             logging.info(f"Created task note: {file_path}")
             return file_path
         except Exception as e:
+            logging.info(f"DEBUG: ERROR during file creation for {file_path}: {e}") # DEBUG PRINT 5 - VERY IMPORTANT!
             logging.error(f"Error creating task note: {e}")
             return None
 
@@ -1371,6 +1376,8 @@ class DiaryTUI:
             elif key in (curses.KEY_ENTER, 10, 13):
                 if current_field_index == len(fields): # Create Task Button
                     task_data = {f['label']: f['value'] for f in fields}
+                    logging.info("DEBUG: Task Data being created:")
+                    logging.info(task_data)
                     recurrence_data = None
                     if task_data['Recurrence Frequency'] != 'none':
                         recurrence_data = {"frequency": task_data['Recurrence Frequency']}
@@ -1384,19 +1391,22 @@ class DiaryTUI:
                                 self.display_error("Invalid Day of Month. Task creation cancelled.")
                                 break # Exit form loop
 
-                    if recurrence_data is not None: # Only create if recurrence data is valid or None
-                        created = self.task_manager.create_task(
-                            title=task_data['Title'],
-                            due=task_data['Due Date (YYYY-MM-DD)'] if task_data['Due Date (YYYY-MM-DD)'] else None,
-                            priority=task_data['Priority'],
-                            extra_tags=[tag.strip() for tag in task_data['Extra Tags (comma-separated)'].split(',') if tag.strip()],
-                            contexts=[ctx.strip() for ctx in task_data['Context Tags (comma-separated)'].split(',') if ctx.strip()],
-                            recurrence_data=recurrence_data
-                        )
-                        if created:
-                            self.display_error("Task created successfully.")
-                        else:
-                            self.display_error("Failed to create task.")
+                    logging.info("DEBUG: Value of recurrence_data before check:") # ADD THIS LINE
+                    logging.info(recurrence_data)                                # ADD THIS LINE
+
+                    logging.info("DEBUG: About to call task_manager.create_task...")
+                    created = self.task_manager.create_task(
+                        title=task_data['Title'],
+                        due=task_data['Due Date (YYYY-MM-DD)'] if task_data['Due Date (YYYY-MM-DD)'] else None,
+                        priority=task_data['Priority'],
+                        extra_tags=[tag.strip() for tag in task_data['Extra Tags (comma-separated)'].split(',') if tag.strip()],
+                        contexts=[ctx.strip() for ctx in task_data['Context Tags (comma-separated)'].split(',') if ctx.strip()],
+                        recurrence_data=recurrence_data
+                    )
+                    if created:
+                        self.display_error("Task created successfully.")
+                    else:
+                        self.display_error("Failed to create task.")
                     break # Exit form loop and return 'TASK_CREATED'
 
                 elif current_field_index == len(fields)+1: # Cancel Button
