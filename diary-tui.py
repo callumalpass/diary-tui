@@ -6,11 +6,11 @@ Features:
   - Daily diary entries with YAML frontmatter metadata.
   - Tasks are individual markdown notes in NOTES_DIR (with YAML frontmatter).
   - Tasks (one-off and recurring) are indexed via NOTES_DIR/index.json.
-  - Tasks can be filtered by status: open, in-progress, done, or all.
+  - Tasks can be filtered by status: open, in-progress, done, or all, **and archive**.
   - Toggle a task’s status by cycling through open → in-progress → done (for one‑offs)
     or, for recurring tasks, toggling today’s instance completion.
   - New keybind (O) to open the currently selected task in your editor.
-  - New keybinds: (x) to delete a task and (z) to cycle its priority.
+  - New keybinds: (x) to delete a task, (z) to cycle its priority, **(A) to archive/unarchive**.
   - Timeblock editing/updating (including adding an empty timeblock template) remains.
   - Multiple calendar views: year, month, week.
   - Search and tag filtering.
@@ -30,6 +30,10 @@ Features:
       • Tasks can now be tagged with contexts in a new YAML "contexts" section (list of strings).
       • Filter tasks by context tag using a new keybind ('c').
       • Context tags are displayed in the task list.
+  - **TASK ARCHIVING:**
+      • Tasks can be archived using the 'A' key or Command Palette.
+      • Archived tasks are hidden from default task views.
+      • View archived tasks by cycling task filter to 'archive' using 'R' key.
 
 Dependencies: curses, yaml, json
 """
@@ -459,14 +463,20 @@ class TaskManager:
         self.tasks = tasks
 
     def filter_tasks(self, status_filter: str, current_date: datetime, context_filter: str = None):
-        # status_filter can be "open", "in-progress", "done" or "all"
+        # status_filter can be "open", "in-progress", "done", "all", or "archive"
         filtered = []
         for t in self.tasks:
-            effective_status = self.get_effective_status(t, current_date)
-            status_match = (status_filter == "all" or effective_status == status_filter or t.get("status", "open") == status_filter)
-            context_match = (context_filter is None or (isinstance(t.get("contexts"), list) and context_filter.lower() in [c.lower() for c in t.get("contexts", [])]))
-            if status_match and context_match:
-                filtered.append(t)
+            is_archived = isinstance(t.get("tags"), list) and "archive" in t.get("tags")
+            if status_filter == "archive":
+                if is_archived:
+                    filtered.append(t) # Show all archived tasks regardless of status
+            else: # For all other filters, exclude archived tasks
+                if not is_archived:
+                    effective_status = self.get_effective_status(t, current_date)
+                    status_match = (status_filter == "all" or effective_status == status_filter or t.get("status", "open") == status_filter)
+                    context_match = (context_filter is None or (isinstance(t.get("contexts"), list) and context_filter.lower() in [c.lower() for c in t.get("contexts", [])]))
+                    if status_match and context_match:
+                        filtered.append(t)
         return filtered
 
     def create_task(self, title, due=None, priority="normal", extra_tags=None, recurrence_data: dict = None, contexts=None):
@@ -553,6 +563,26 @@ class TaskManager:
         except Exception as e:
             logging.error(f"Error deleting task {task_path}: {e}")
             return False
+
+    def archive_task(self, task_path: Path, archive: bool = True):
+        md = metadata_cache.get_metadata(task_path)
+        tags = md.get("tags", [])
+        if not isinstance(tags, list):
+            tags = []
+        if archive:
+            if "archive" not in tags:
+                tags.append("archive")
+        else:
+            if "archive" in tags:
+                tags.remove("archive")
+        md["tags"] = tags
+        if metadata_cache.rewrite_front_matter(task_path, md):
+            logging.info(f"Set task {task_path} archive status to {archive}")
+            return True
+        else:
+            logging.error(f"Failed to update task archive status for {task_path}")
+            return False
+
 
 # ---------------------------------------------------------------------
 # HELPER FUNCTIONS (DIARY, SEARCH, LINKS, ETC.)
@@ -698,7 +728,7 @@ class DiaryTUI:
         self.tmux_path = shutil.which("tmux")
         self.fallback_editor = shutil.which("vi") or shutil.which("nano")
         # Tasks related attributes
-        self.task_filter = "open"  # can be open, in-progress, done, or "all"
+        self.task_filter = "open"  # can be open, in-progress, done, "all", or "archive"
         self.context_filter = None # New context filter
         self.task_manager = TaskManager(NOTES_DIR)
         self.tasks_list = []  # list of task dicts from the index (will include effective status for recurring tasks)
@@ -799,6 +829,8 @@ class DiaryTUI:
                        f"Focus: {focus} | View: {self.current_view} ")
         if focus == "Tasks":
             status_text += f"| Task Filter: {self.task_filter} "
+            if self.task_filter == "archive":
+                status_text += "(Archived Tasks)" # Add indication for archive view
             if self.context_filter:
                 status_text += f"| Context Filter: {self.context_filter} " # Show context filter in status bar
         try:
@@ -896,7 +928,10 @@ class DiaryTUI:
             due = task.get("due", "")
             priority = task.get("priority", "normal")
             contexts = task.get("contexts", []) # Get contexts
+            is_archived = isinstance(task.get("tags"), list) and "archive" in task.get("tags")
             attr = curses.A_NORMAL
+            if is_archived:
+                attr |= curses.A_DIM # Dim archived tasks in archive view if needed
             if priority == "high":
                 attr |= curses.color_pair(5)
             elif priority == "low":
@@ -939,7 +974,10 @@ class DiaryTUI:
             due = task.get("due", "")
             priority = task.get("priority", "normal")
             contexts = task.get("contexts", []) # Get contexts
+            is_archived = isinstance(task.get("tags"), list) and "archive" in task.get("tags")
             attr = curses.A_NORMAL
+            if is_archived:
+                attr |= curses.A_DIM # Dim archived tasks in archive view if needed
             if priority == "high":
                 attr |= curses.color_pair(5)
             elif priority == "low":
@@ -1158,6 +1196,8 @@ class DiaryTUI:
             self.delete_selected_task()
         elif key == ord('z') and self.task_pane_focused:
             self.cycle_selected_task_priority()
+        elif key == ord('A') and self.task_pane_focused:
+            self.toggle_archive_selected_task()
         return True
 
     def handle_mouse(self):
@@ -1447,14 +1487,10 @@ class DiaryTUI:
         else:
             return 'TASK_CANCELLED'
 
-
-
-
     def handle_task_creation_form_input(self):
         height, width = self.stdscr.getmaxyx()
         result = self.show_task_creation_form(height, width)
         return result
-
 
     def create_new_task(self):
         self.task_creation_form_active = True
@@ -1485,7 +1521,7 @@ class DiaryTUI:
                     break
 
     def cycle_task_filter(self):
-        order = ["open", "in-progress", "done", "all"]
+        order = ["open", "in-progress", "done", "all", "archive"] # Added "archive" to filter cycle
         try:
             idx = order.index(self.task_filter)
             self.task_filter = order[(idx + 1) % len(order)]
@@ -1604,10 +1640,11 @@ class DiaryTUI:
             "  1        : Show Timeblock view",
             "  2        : Show Tasks view",
             "  3        : Show Preview view (fullscreen only)",
-            "  R        : Cycle task filter (open -> in-progress -> done -> all)",
+            "  R        : Cycle task filter (open -> in-progress -> done -> all -> archive)", # Updated filter cycle help
             "  O        : Open selected task in editor",
             "  x        : Delete selected task (in Tasks view)",
             "  z        : Cycle task priority (in Tasks view)",
+            "  A        : Toggle archive status of selected task (in Tasks view)", # Added archive key to help
             "  Enter    : In Tasks view, toggle selected task status",
             "  Ctrl+P   : Command Palette",
             "  q        : Quit",
@@ -1722,7 +1759,11 @@ class DiaryTUI:
             ("Search Diary", lambda: self.perform_search(height, width)),
             ("Filter by Tag", lambda: self.perform_tag_filter(height, width)),
             ("Filter by Context Tag", lambda: self.perform_context_filter(height, width)), # Added context filter to command palette
-            ("List Links", lambda: self.list_links(height, width, current_file))
+            ("List Links", lambda: self.list_links(height, width, current_file)),
+            ("Archive Selected Task", self.archive_selected_task, lambda: self.task_filter != "archive"), # Conditional archive
+            ("Un-archive Selected Task", self.unarchive_selected_task, lambda: self.task_filter == "archive"), # Conditional unarchive
+            ("Show Archived Tasks", lambda: setattr(self, 'task_filter', 'archive')), # Show archived
+            ("Show Active Tasks", lambda: setattr(self, 'task_filter', 'open')), # Show active (open filter)
         ]
         palette_h = min(len(commands) + 4, height - 4)
         palette_w = min(60, width - 4)
@@ -1738,7 +1779,8 @@ class DiaryTUI:
             pass
         selected = 0
         while True:
-            for idx, (cmd_text, _) in enumerate(commands):
+            filtered_commands = [(cmd_text, cmd_func) for cmd_text, cmd_func, condition in [(c[0], c[1], c[2]() if len(c)>2 else True) for c in commands] if condition]
+            for idx, (cmd_text, _) in enumerate(filtered_commands):
                 mode = curses.A_REVERSE if idx == selected else curses.A_NORMAL
                 try:
                     win.addstr(2 + idx, 2, cmd_text.ljust(palette_w - 4), mode)
@@ -1747,22 +1789,57 @@ class DiaryTUI:
             win.refresh()
             key = win.getch()
             if key in (curses.KEY_UP, ord('k')):
-                selected = (selected - 1) % len(commands)
+                selected = (selected - 1) % len(filtered_commands)
             elif key in (curses.KEY_DOWN, ord('j')):
-                selected = (selected + 1) % len(commands)
+                selected = (selected + 1) % len(filtered_commands)
             elif key in (curses.KEY_ENTER, 10, 13):
                 win.clear()
                 win.refresh()
                 try:
-                    commands[selected][1]()
+                    filtered_commands[selected][1]()
                 except Exception as e:
-                    logging.error(f"Error executing command '{commands[selected][0]}': {e}")
+                    logging.error(f"Error executing command '{filtered_commands[selected][0]}': {e}")
                 break
             elif key in (27, ord('q')):
                 break
         win.clear()
         self.stdscr.touchwin()
         self.stdscr.refresh()
+
+    def archive_selected_task(self):
+        self.read_tasks_cache()
+        if not self.tasks_list:
+            return
+        if 0 <= self.selected_task_index < len(self.tasks_list):
+            task = self.tasks_list[self.selected_task_index]
+            filename_prefix = task.get("zettelid")
+            for file in NOTES_DIR.glob(f"{filename_prefix}*.md"):
+                if file.is_file():
+                    if self.task_manager.archive_task(file, archive=True):
+                        self.display_error("Task archived.")
+                        self.read_tasks_cache()
+                    break
+
+    def unarchive_selected_task(self):
+        self.read_tasks_cache()
+        if not self.tasks_list:
+            return
+        if 0 <= self.selected_task_index < len(self.tasks_list):
+            task = self.tasks_list[self.selected_task_index]
+            filename_prefix = task.get("zettelid")
+            for file in NOTES_DIR.glob(f"{filename_prefix}*.md"):
+                if file.is_file():
+                    if self.task_manager.archive_task(file, archive=False):
+                        self.display_error("Task un-archived.")
+                        self.read_tasks_cache()
+                    break
+
+    def toggle_archive_selected_task(self):
+        if self.task_filter == "archive":
+            self.unarchive_selected_task()
+        else:
+            self.archive_selected_task()
+
 
 # ---------------------------------------------------------------------
 # CALENDAR DRAWING HELPERS
