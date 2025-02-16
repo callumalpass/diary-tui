@@ -49,9 +49,9 @@ CONFIG_DIR = Path.home() / ".config" / "diary-tui"
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
 
 DEFAULT_CONFIG = {
-    "diary_dir": "/home/calluma/Dropbox/notes/diary",
-    "notes_dir": "/home/calluma/Dropbox/notes",
-    "home_file": "/home/calluma/Dropbox/notes/home.md",
+    "diary_dir": str(Path.home() / "diary"),
+    "notes_dir": str(Path.home() / "notes"),
+    "home_file": str(Path.home() / "notes" / "home.md"),
     "log_file": "/tmp/calendar_tui.log",
     "editor": "nvim"  # or specify "vi", "nano", etc.
 }
@@ -93,10 +93,20 @@ class MetadataCache:
     def __init__(self):
         self.cache = {}
         self.file_hashes = {}
+        self.file_mod_times = {} 
 
     def get_metadata(self, file_path: Path) -> dict:
         if not file_path.exists():
             return {}
+        try:
+            current_mod_time = file_path.stat().st_mtime
+        except Exception as e:
+            logging.error(f"Error getting mod time for {file_path}: {e}")
+            return {}
+
+        if file_path in self.cache and self.file_mod_times.get(file_path) == current_mod_time:
+            return self.cache[file_path]
+
         try:
             with file_path.open("r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -121,6 +131,7 @@ class MetadataCache:
             metadata = {}
         self.cache[file_path] = metadata
         self.file_hashes[file_path] = current_hash
+        self.file_mod_times[file_path] = current_mod_time
         return metadata
 
     def rewrite_front_matter(self, file_path: Path, new_md: dict) -> bool:
@@ -176,10 +187,21 @@ class TimeblockCache:
     def __init__(self):
         self.cache = {}
         self.file_hashes = {}
+        self.file_mod_times = {} # ADDED: Store modification times
 
     def get_timeblock(self, file_path: Path):
         if not file_path.exists():
             return []
+
+        try:
+            current_mod_time = file_path.stat().st_mtime
+        except Exception as e:
+            logging.error(f"Error getting mod time for {file_path}: {e}")
+            return []
+
+        if file_path in self.cache and self.file_mod_times.get(file_path) == current_mod_time:
+            return self.cache[file_path]
+
         try:
             with file_path.open("r", encoding="utf-8") as f:
                 contents = f.read()
@@ -192,8 +214,9 @@ class TimeblockCache:
         tb = self.parse_timeblock(contents)
         self.cache[file_path] = tb
         self.file_hashes[file_path] = current_hash
+        self.file_mod_times[file_path] = current_mod_time
         return tb
-
+        
     def parse_timeblock(self, text: str):
         lines = text.splitlines()
         in_tb = False
@@ -343,6 +366,7 @@ class TaskManager:
             logging.error(f"Error loading index file {index_file}: {e}")
             return []
 
+    
     def load_tasks(self):
         index_data = self.load_index()
         tasks = []
@@ -350,8 +374,21 @@ class TaskManager:
             tags = note.get("tags")
             if isinstance(tags, list) and "task" in tags:
                 tasks.append(note)
-        # sort tasks first by due date (if any) and then by priority
+
+        def is_task_overdue(task):
+            due = task.get("due")
+            status = task.get("status", "open")
+            if due and status != "done":
+                try:
+                    due_date = datetime.strptime(due, "%Y-%m-%d")
+                    return due_date.date() < datetime.today().date()  # Compare dates only
+                except ValueError:
+                    return False  # Invalid date format, not considered overdue
+            return False
+
+        # sort tasks: 1. overdue (at the top), 2. priority, 3. due date
         def sort_key(task):
+            overdue = is_task_overdue(task)
             due = task.get("due")
             try:
                 due_date = datetime.strptime(due, "%Y-%m-%d") if due else datetime.max
@@ -359,9 +396,11 @@ class TaskManager:
                 due_date = datetime.max
             priority = task.get("priority", "normal")
             priority_order = {"high": 0, "normal": 1, "low": 2}
-            return (due_date, priority_order.get(priority, 1))
+            return (not overdue, priority_order.get(priority, 1), due_date) # not overdue to put overdue tasks first
+
         tasks.sort(key=sort_key)
         self.tasks = tasks
+
 
     def filter_tasks(self, status_filter):
         return [t for t in self.tasks if t.get("status", "open") == status_filter]
