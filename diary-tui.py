@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-CALENDAR/TIME-MANAGING/VIEWING SCRIPT (with TASK NOTES)
+CALENDAR/TIME-MANAGING/VIEWING SCRIPT (with TASK NOTES & RECURRING TASK MANAGEMENT)
 
 Features:
   - Daily diary entries with YAML frontmatter metadata.
   - Tasks are individual markdown notes in NOTES_DIR (with YAML frontmatter).
-  - Tasks are indexed via NOTES_DIR/index.json.
-  - Tasks can be filtered by status: open, in-progress, or done.
-  - Toggle a task’s status by cycling through open → in-progress → done → open.
-  - Keybind (O) to open the currently selected task in your editor.
+  - Tasks (one-off and recurring) are indexed via NOTES_DIR/index.json.
+  - Tasks can be filtered by status: open, in-progress, done, or all.
+  - Toggle a task’s status by cycling through open → in-progress → done (for one‑offs)
+    or, for recurring tasks, toggling today’s instance completion.
+  - New keybind (O) to open the currently selected task in your editor.
   - New keybinds: (x) to delete a task and (z) to cycle its priority.
-  - Timeblock editing/updating (including adding an empty timeblock template).
+  - Timeblock editing/updating (including adding an empty timeblock template) remains.
   - Multiple calendar views: year, month, week.
   - Search and tag filtering.
   - Side-by-side and fullscreen modes for preview, tasks, and timeblock views.
@@ -18,10 +19,16 @@ Features:
   - Live screen refresh and mouse support.
   - A context-aware command palette (Ctrl+P) for quick commands.
   - Robust error handling with logging.
+  - RECURRING TASK MANAGEMENT:
+      • Tasks can now define recurrence rules in a new YAML “recurrence” section.
+      • Recurrence frequencies include: daily, weekly, monthly, yearly.
+      • Weekly tasks use the “days_of_week” field and monthly/yearly tasks use “day_of_month”.
+      • Completed instances are tracked in a new “complete_instances” list (YYYY-MM-DD).
+      • When toggled (Enter key), a recurring task’s “today” instance is marked
+        complete (or undone) without affecting future recurrences.
 
 Dependencies: curses, yaml, json
 """
-
 import threading
 import time
 import curses
@@ -93,7 +100,7 @@ class MetadataCache:
     def __init__(self):
         self.cache = {}
         self.file_hashes = {}
-        self.file_mod_times = {} 
+        self.file_mod_times = {}
 
     def get_metadata(self, file_path: Path) -> dict:
         if not file_path.exists():
@@ -187,7 +194,7 @@ class TimeblockCache:
     def __init__(self):
         self.cache = {}
         self.file_hashes = {}
-        self.file_mod_times = {} # ADDED: Store modification times
+        self.file_mod_times = {}
 
     def get_timeblock(self, file_path: Path):
         if not file_path.exists():
@@ -216,7 +223,7 @@ class TimeblockCache:
         self.file_hashes[file_path] = current_hash
         self.file_mod_times[file_path] = current_mod_time
         return tb
-        
+
     def parse_timeblock(self, text: str):
         lines = text.splitlines()
         in_tb = False
@@ -339,7 +346,7 @@ def add_default_timeblock(file_path: Path):
         return False
 
 # ---------------------------------------------------------------------
-# TASKS & INDEX FUNCTIONS (Improved Version)
+# TASKS & INDEX FUNCTIONS (Revised to implement recurrence)
 # ---------------------------------------------------------------------
 def generate_task_filename():
     date_prefix = datetime.now().strftime("%y%m%d")
@@ -351,7 +358,8 @@ class TaskManager:
         self.notes_dir = notes_dir
         self.index_cache = {"data": None, "mtime": 0}
         self.tasks = []
-        self.load_tasks()
+        # Initially load tasks for today
+        self.load_tasks(datetime.now())
 
     def load_index(self):
         index_file = self.notes_dir / "index.json"
@@ -366,29 +374,74 @@ class TaskManager:
             logging.error(f"Error loading index file {index_file}: {e}")
             return []
 
-    
-    def load_tasks(self):
+    def _is_task_due_today(self, task: dict, current_date: datetime) -> bool:
+        # For a task with recurrence rules, determine if it should appear on current_date.
+        rec = task.get("recurrence")
+        if not rec:
+            return True  # one-off tasks are always loaded here
+        frequency = rec.get("frequency", "").lower()
+        # Daily: every day is due.
+        if frequency == "daily":
+            return True
+        elif frequency == "weekly":
+            # require a list of days (abbreviations, e.g., mon, tue, etc.)
+            days = rec.get("days_of_week", [])
+            # Map Monday=mon,... Sunday=sun. Note: Python weekday(): Monday==0.
+            week_map = {0:"mon",1:"tue",2:"wed",3:"thu",4:"fri",5:"sat",6:"sun"}
+            if week_map[current_date.weekday()] in days:
+                return True
+        elif frequency == "monthly":
+            dom = rec.get("day_of_month")
+            if dom and current_date.day == int(dom):
+                return True
+        elif frequency == "yearly":
+            # For yearly, compare both month and day. Use initial task date as baseline.
+            try:
+                orig_date = datetime.strptime(task.get("date", ""), "%Y-%m-%dT%H:%M:%S")
+            except Exception:
+                orig_date = current_date  # fallback
+            if current_date.month == orig_date.month and current_date.day == int(rec.get("day_of_month", orig_date.day)):
+                return True
+        return False
+
+    def get_effective_status(self, task: dict, current_date: datetime) -> str:
+        # For recurring tasks, effective status is determined by whether today's instance is complete.
+        if task.get("recurrence"):
+            comp = task.get("complete_instances", [])
+            if current_date.strftime("%Y-%m-%d") in comp:
+                return "done"
+            else:
+                return "open"
+        else:
+            return task.get("status", "open")
+
+    def load_tasks(self, current_date: datetime):
         index_data = self.load_index()
         tasks = []
         for note in index_data:
             tags = note.get("tags")
             if isinstance(tags, list) and "task" in tags:
-                tasks.append(note)
-
-        def is_task_overdue(task):
+                # For recurring tasks, only include if due today.
+                if note.get("recurrence"):
+                    if self._is_task_due_today(note, current_date):
+                        tasks.append(note)
+                else:
+                    tasks.append(note)
+        # sort tasks: overdue first (only non-recurring tasks use due dates),
+        # then by priority and due date.
+        def is_overdue(task):
             due = task.get("due")
-            status = task.get("status", "open")
+            status = self.get_effective_status(task, current_date)
             if due and status != "done":
                 try:
                     due_date = datetime.strptime(due, "%Y-%m-%d")
-                    return due_date.date() < datetime.today().date()  # Compare dates only
+                    return due_date.date() < current_date.date()
                 except ValueError:
-                    return False  # Invalid date format, not considered overdue
+                    return False
             return False
 
-        # sort tasks: 1. overdue (at the top), 2. priority, 3. due date
         def sort_key(task):
-            overdue = is_task_overdue(task)
+            overdue = is_overdue(task)
             due = task.get("due")
             try:
                 due_date = datetime.strptime(due, "%Y-%m-%d") if due else datetime.max
@@ -396,16 +449,21 @@ class TaskManager:
                 due_date = datetime.max
             priority = task.get("priority", "normal")
             priority_order = {"high": 0, "normal": 1, "low": 2}
-            return (not overdue, priority_order.get(priority, 1), due_date) # not overdue to put overdue tasks first
+            return (not overdue, priority_order.get(priority, 1), due_date)
 
         tasks.sort(key=sort_key)
         self.tasks = tasks
 
+    def filter_tasks(self, status_filter: str, current_date: datetime):
+        # status_filter can be "open", "in-progress", "done" or "all"
+        filtered = []
+        for t in self.tasks:
+            effective_status = self.get_effective_status(t, current_date)
+            if status_filter == "all" or effective_status == status_filter or t.get("status", "open") == status_filter:
+                filtered.append(t)
+        return filtered
 
-    def filter_tasks(self, status_filter):
-        return [t for t in self.tasks if t.get("status", "open") == status_filter]
-
-    def create_task(self, title, due=None, priority="normal", extra_tags=None):
+    def create_task(self, title, due=None, priority="normal", extra_tags=None, recurrence_data: dict = None):
         filename = generate_task_filename()
         zettelid = filename[:-3]  # without .md
         file_path = NOTES_DIR / filename
@@ -415,14 +473,16 @@ class TaskManager:
         frontmatter = {
             "title": title,
             "zettelid": zettelid,
-            "date": today,
-            "datetime": now_str,
+            "date": now_str,
             "dateModified": now_str,
             "status": "open",
             "due": due,
             "tags": ["task"] + (extra_tags if extra_tags else []),
             "priority": priority
         }
+        if recurrence_data:
+            frontmatter["recurrence"] = recurrence_data
+            frontmatter["complete_instances"] = []
         content = (
             "---\n" +
             yaml.dump(frontmatter, sort_keys=False) +
@@ -440,11 +500,22 @@ class TaskManager:
 
     def toggle_task_status(self, task_path: Path):
         md = metadata_cache.get_metadata(task_path)
-        current_status = md.get("status", "open")
-        new_status = {"open": "in-progress", "in-progress": "done", "done": "open"}.get(current_status, "open")
-        md["status"] = new_status
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        # For recurring tasks, toggle today’s instance in complete_instances.
+        if "recurrence" in md:
+            complete = md.get("complete_instances", [])
+            if today_str in complete:
+                complete.remove(today_str)
+            else:
+                complete.append(today_str)
+            md["complete_instances"] = complete
+            # Do not change the overall "status" field.
+        else:
+            current_status = md.get("status", "open")
+            new_status = {"open": "in-progress", "in-progress": "done", "done": "open"}.get(current_status, "open")
+            md["status"] = new_status
         if metadata_cache.rewrite_front_matter(task_path, md):
-            logging.info(f"Set task {task_path} status to {new_status}")
+            logging.info(f"Updated task {task_path}")
             return True
         else:
             logging.error(f"Failed to update task status for {task_path}")
@@ -582,7 +653,7 @@ def draw_preview(stdscr, lines, start_y, start_x, height, width, scroll):
             pass
 
 # ---------------------------------------------------------------------
-# DIARY TUI CLASS (COMBINED FUNCTIONALITY)
+# DIARY TUI CLASS (with combined functionality including recurring tasks)
 # ---------------------------------------------------------------------
 class DiaryTUI:
     def __init__(self, stdscr):
@@ -599,7 +670,7 @@ class DiaryTUI:
         curses.init_pair(6, curses.COLOR_YELLOW, -1)
         curses.init_pair(7, curses.COLOR_WHITE, curses.COLOR_BLUE)
         curses.init_pair(8, curses.COLOR_BLACK, -1)
-        curses.init_pair(9, curses.COLOR_BLUE, -1)  # overdue
+        curses.init_pair(9, curses.COLOR_BLUE, -1)         # overdue
         curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
         curses.mouseinterval(0)
         self.cal = calendar.TextCalendar(calendar.SUNDAY)
@@ -614,10 +685,10 @@ class DiaryTUI:
         self.nvim_path = shutil.which("nvim")
         self.tmux_path = shutil.which("tmux")
         self.fallback_editor = shutil.which("vi") or shutil.which("nano")
-        # Tasks-related attributes
-        self.task_filter = "open"  # filter for tasks: "open", "in-progress", "done"
+        # Tasks related attributes
+        self.task_filter = "open"  # can be open, in-progress, done, or "all"
         self.task_manager = TaskManager(NOTES_DIR)
-        self.tasks_list = []  # list of task dicts from the index
+        self.tasks_list = []  # list of task dicts from the index (will include effective status for recurring tasks)
         self.selected_task_index = 0
         self.selected_timeblock_index = 0
         self.show_tasks = True  # in side-by-side mode, show tasks pane by default
@@ -631,7 +702,6 @@ class DiaryTUI:
         self.preview_pane_focused = False
 
     def get_week_start(self) -> datetime:
-        # Compute the week start (Sunday) for the selected date.
         delta = (self.selected_date.weekday() + 1) % 7
         return self.selected_date - timedelta(days=delta)
 
@@ -775,19 +845,18 @@ class DiaryTUI:
         draw_preview(self.stdscr, lines, preview_y, preview_x, height, width, self.preview_scroll)
 
     def read_tasks_cache(self):
-        self.task_manager.load_tasks()
-        self.tasks_list = self.task_manager.filter_tasks(self.task_filter)
+        # Reload tasks using selected_date for recurrence checking.
+        self.task_manager.load_tasks(self.selected_date)
+        self.tasks_list = self.task_manager.filter_tasks(self.task_filter, self.selected_date)
 
     def display_error(self, msg):
         height, width = self.stdscr.getmaxyx()
-        # Display the message on the second-to-last line in bold.
         try:
             self.stdscr.addnstr(height - 2, 2, msg, width - 4, curses.A_BOLD)
         except curses.error:
             pass
         self.stdscr.refresh()
-        time.sleep(1)  # Pause for a moment so you can read the message.
-
+        time.sleep(1)
 
     def draw_tasks_pane(self, height, width):
         tasks_y = self.calendar_height_side + 3
@@ -796,12 +865,13 @@ class DiaryTUI:
         available_width = (width // 2) - 4
         self.read_tasks_cache()
         for idx, task in enumerate(self.tasks_list[self.preview_scroll:self.preview_scroll + available_height]):
-            status = task.get("status", "open")
-            mark = "[x]" if status == "done" else ("[~]" if status == "in-progress" else "[ ]")
+            # Mark recurring tasks with * at the start.
+            prefix = "[*]" if task.get("recurrence") else ""
+            effective_status = self.task_manager.get_effective_status(task, self.selected_date)
+            mark = "[x]" if effective_status == "done" else ("[~]" if effective_status == "in-progress" else "[ ]")
             title = task.get("title", "Untitled")
             due = task.get("due", "")
             priority = task.get("priority", "normal")
-            # Determine color based on priority and overdue status
             attr = curses.A_NORMAL
             if priority == "high":
                 attr |= curses.color_pair(5)
@@ -809,15 +879,14 @@ class DiaryTUI:
                 attr |= curses.color_pair(3)
             else:
                 attr |= curses.color_pair(6)
-            # Check overdue: if due date exists and is past and not done
             if due:
                 try:
                     due_date = datetime.strptime(due, "%Y-%m-%d")
-                    if due_date < datetime.today() and status != "done":
+                    if due_date < datetime.today() and effective_status != "done":
                         attr = curses.color_pair(9) | curses.A_BOLD
                 except Exception:
                     pass
-            line = f"- {mark} {title}"
+            line = f"- {mark}{prefix} {title}"
             if self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index:
                 attr |= curses.A_REVERSE
             if due:
@@ -834,8 +903,9 @@ class DiaryTUI:
         available_width = width - 4
         self.read_tasks_cache()
         for idx, task in enumerate(self.tasks_list[self.preview_scroll:self.preview_scroll + available_height]):
-            status = task.get("status", "open")
-            mark = "[x]" if status == "done" else ("[~]" if status == "in-progress" else "[ ]")
+            prefix = "[*]" if task.get("recurrence") else ""
+            effective_status = self.task_manager.get_effective_status(task, self.selected_date)
+            mark = "[x]" if effective_status == "done" else ("[~]" if effective_status == "in-progress" else "[ ]")
             title = task.get("title", "Untitled")
             due = task.get("due", "")
             priority = task.get("priority", "normal")
@@ -849,11 +919,11 @@ class DiaryTUI:
             if due:
                 try:
                     due_date = datetime.strptime(due, "%Y-%m-%d")
-                    if due_date < datetime.today() and status != "done":
+                    if due_date < datetime.today() and effective_status != "done":
                         attr = curses.color_pair(9) | curses.A_BOLD
                 except Exception:
                     pass
-            line = f"- {mark} {title}"
+            line = f"- {mark}{prefix} {title}"
             if self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index:
                 attr |= curses.A_REVERSE
             if due:
@@ -1036,25 +1106,19 @@ class DiaryTUI:
         elif key == ord('3'):
             if not self.is_side_by_side:
                 self.non_side_by_side_mode = "preview"
-        # In tasks view, Enter toggles task status
         elif key in (10, 13) and self.task_pane_focused:
             self.toggle_task()
-        # In timeblock view, Enter adds an entry for the selected time block
         elif key in (10, 13) and self.timeblock_pane_focused:
             tb = timeblock_cache.get_timeblock(file_path)
             if 0 <= self.selected_timeblock_index < len(tb):
                 t_sel, _ = tb[self.selected_timeblock_index]
                 self.add_timeblock_entry(file_path, date_str, t_sel)
-        # New keybind: 'O' opens the selected task in the editor
         elif key == ord('O') and self.task_pane_focused:
             self.open_selected_task()
-        # New keybind: 'R' cycles the task filter (only in tasks view)
         elif key == ord('R') and self.non_side_by_side_mode == "tasks":
             self.cycle_task_filter()
-        # New keybind: 'x' to delete selected task (in tasks view)
         elif key == ord('x') and self.task_pane_focused:
             self.delete_selected_task()
-        # New keybind: 'z' to cycle selected task priority (in tasks view)
         elif key == ord('z') and self.task_pane_focused:
             self.cycle_selected_task_priority()
         return True
@@ -1198,8 +1262,25 @@ class DiaryTUI:
             self.stdscr.clrtoeol()
             tags_input = self.stdscr.getstr(0, 40, 50).decode("utf-8").strip()
             extra_tags = [tag.strip() for tag in tags_input.split(',') if tag.strip()] if tags_input else []
+            # NEW: Prompt for recurrence rules.
+            self.stdscr.addstr(0, 1, "Recurrence frequency (none/daily/weekly/monthly/yearly): ")
+            self.stdscr.clrtoeol()
+            freq = self.stdscr.getstr(0, 50, 10).decode("utf-8").strip().lower()  # use column index "fifty"
+            recurrence = None
+            if freq and freq != "none":
+                recurrence = {"frequency": freq}
+                if freq == "weekly":
+                    self.stdscr.addstr(0, 1, "Days of week (e.g., mon,wed,fri): ")
+                    self.stdscr.clrtoeol()
+                    days_in = self.stdscr.getstr(0, 36, 20).decode("utf-8").strip()
+                    recurrence["days_of_week"] = [d.strip().lower() for d in days_in.split(",") if d.strip()]
+                elif freq in ("monthly", "yearly"):
+                    self.stdscr.addstr(0, 1, "Day of month (e.g., 15): ")
+                    self.stdscr.clrtoeol()
+                    dom_in = self.stdscr.getstr(0, 28, 5).decode("utf-8").strip()
+                    recurrence["day_of_month"] = int(dom_in) if dom_in.isdigit() else 1
             curses.noecho()
-            created = self.task_manager.create_task(title, due if due else None, priority, extra_tags)
+            created = self.task_manager.create_task(title, due if due else None, priority, extra_tags, recurrence)
             if created:
                 self.display_error("Task created successfully.")
             else:
@@ -1235,7 +1316,7 @@ class DiaryTUI:
                     break
 
     def cycle_task_filter(self):
-        order = ["open", "in-progress", "done"]
+        order = ["open", "in-progress", "done", "all"]
         try:
             idx = order.index(self.task_filter)
             self.task_filter = order[(idx + 1) % len(order)]
@@ -1340,7 +1421,7 @@ class DiaryTUI:
             "  m/w/y    : Switch to Month/Week/Year view",
             "  o        : Toggle side-by-side layout",
             "  a        : Add note",
-            "  C        : Create New Task",
+            "  C        : Create New Task (with recurrence support)",
             "  T        : Add empty timeblock template",
             "  e        : Edit diary entry",
             "  t        : Jump to today",
@@ -1353,7 +1434,7 @@ class DiaryTUI:
             "  1        : Show Timeblock view",
             "  2        : Show Tasks view",
             "  3        : Show Preview view (fullscreen only)",
-            "  R        : Cycle task filter (open -> in-progress -> done)",
+            "  R        : Cycle task filter (open -> in-progress -> done -> all)",
             "  O        : Open selected task in editor",
             "  x        : Delete selected task (in Tasks view)",
             "  z        : Cycle task priority (in Tasks view)",
