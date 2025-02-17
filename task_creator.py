@@ -52,13 +52,13 @@ NOTES_DIR = Path(CONFIG["notes_dir"])
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(message)s')
 
 # ---------------------------------------------------------------------
-# Simplified TaskManager (only create_task - same as before)
+# Simplified TaskCreator (only create_task - same as before)
 # ---------------------------------------------------------------------
-class TaskManager:
+class TaskCreator:
     def __init__(self, notes_dir: Path):
         self.notes_dir = notes_dir
 
-    def create_task(self, title, due=None, priority="normal", extra_tags=None, recurrence_data: dict = None, contexts=None):
+    def create_task(self, title, due=None, priority="normal", extra_tags=None, recurrence_data: dict = None, contexts=None, details=""):
         """Creates a new task markdown file with YAML frontmatter."""
         date_prefix = datetime.now().strftime("%y%m%d")
         suffix = ''.join(random.choices(string.ascii_lowercase, k=3))
@@ -86,7 +86,8 @@ class TaskManager:
             "---\n" +
             yaml.dump(frontmatter, sort_keys=False) +
             "---\n\n" +
-            f"# {title}\n\n"
+            f"# {title}\n\n" +
+            f"{details}\n" # Add details to content
         )
         try:
             self.notes_dir.mkdir(parents=True, exist_ok=True)
@@ -103,7 +104,10 @@ class TaskManager:
 # ---------------------------------------------------------------------
 def draw_rectangle(win, y1, x1, y2, x2):
     # Removed border drawing
-    pass
+    try:
+        win.border()
+    except curses.error:
+        pass
 
 def _draw_form_frame(form_win, title_text):
     """Draws the form frame and title."""
@@ -178,7 +182,7 @@ def _draw_checkboxes_field(form_win, y_start, label, value, options, is_current_
         checkbox_display = f"[{mark_char}]{option}"
         attr = curses.A_NORMAL
         if is_current_field and j == current_checkbox_index:
-            checkbox_display = f">> {checkbox_display} <<" # More visual selection
+            checkbox_display = f"{checkbox_display}" # More visual selection
             attr = curses.A_BOLD | curses.color_pair(1) # Highlight selected checkbox option
         try:
             form_win.addstr(y_start + 1, 4 + j * 8, checkbox_display, attr | line_attr | curses.color_pair(4))
@@ -187,32 +191,31 @@ def _draw_checkboxes_field(form_win, y_start, label, value, options, is_current_
 
 def show_confirmation_dialog(stdscr, task_info):
     """Shows a confirmation dialog before creating the task (improved)."""
-    dialog_height = 14 # Increased height
+    dialog_height = 16 # Increased height to accommodate details
     dialog_width = 60
     start_y = max(0, (stdscr.getmaxyx()[0] - dialog_height) // 2)
     start_x = max(0, (stdscr.getmaxyx()[1] - dialog_width) // 2)
     dialog_win = curses.newwin(dialog_height, dialog_width, start_y, start_x)
     dialog_win.keypad(True)
-    # draw_rectangle(dialog_win, 0, 0, dialog_height - 1, dialog_width - 1) # Removed border call
+    draw_rectangle(dialog_win, 0, 0, dialog_height - 1, dialog_width - 1) # Removed border call
 
     lines = [
         "Confirm Task Creation?",
         "",
-        "Task Details:", # Clearer section title
         f"  Title: {task_info['title']}",
         f"  Due Date: {task_info['due'] or 'None'}",
         f"  Priority: {task_info['priority']}",
         f"  Contexts: {', '.join(task_info['contexts']) or 'None'}", # Show contexts
         f"  Extra Tags: {', '.join(task_info['extra_tags']) or 'None'}", # Show extra tags
-        "",
-        " [Confirm]   [Cancel] "
+        f"  Details: {task_info['details'] or 'None'}", # Show details
+        ""
     ]
 
     selected_button = 0 # 0 for Confirm, 1 for Cancel
 
     while True:
         dialog_win.clear()
-        # draw_rectangle(dialog_win, 0, 0, dialog_height - 1, dialog_width - 1) # Removed border call
+        draw_rectangle(dialog_win, 0, 0, dialog_height - 1, dialog_width - 1) # Removed border call
         for i, line in enumerate(lines):
             try:
                 dialog_win.addstr(i + 1, (dialog_width - len(line)) // 2, line, curses.color_pair(4) if i > 1 else curses.A_BOLD | curses.color_pair(3)) # Title bold cyan, details white
@@ -241,7 +244,7 @@ def show_confirmation_dialog(stdscr, task_info):
 
 def show_task_creation_form(stdscr, task_manager):
     height, width = stdscr.getmaxyx()
-    form_height = 23
+    form_height = 20 # Increased height for details field
     form_width = 70
     start_y = max(0, (height - form_height) // 2)
     start_x = max(0, (width - form_width) // 2)
@@ -252,6 +255,7 @@ def show_task_creation_form(stdscr, task_manager):
 
     fields = [
         {"label": "Title", "type": "text", "value": "", "placeholder": "Enter task title", "help": "Task title (required)"},
+        {"label": "Details", "type": "text", "value": "", "placeholder": "Enter task details", "help": "Task details (optional, will be body of note)"}, # Added Details field
         {"label": "Due Date (YYYY-MM-DD)", "type": "text", "value": "", "placeholder": "YYYY-MM-DD (optional)", "instruction": "Format: YYYY-MM-DD", "help": "Due date in YYYY-MM-DD format", "error": False}, # Added error flag
         {"label": "Priority", "type": "dropdown", "options": ["low", "normal", "high"], "value": "normal", "help": "Task priority level"},
         {"label": "Context Tags (comma-separated)", "type": "text", "value": "", "placeholder": "tag1, tag2, ... (optional)", "help": "Comma-separated context tags"},
@@ -312,7 +316,7 @@ def show_task_creation_form(stdscr, task_manager):
             if 0 <= current_field_index < len(fields) and fields[current_field_index]["type"] == "checkboxes":
                 current_checkbox_index = 0
         elif key in (curses.KEY_ENTER, 10, 13):
-            if current_field_index == len(fields):
+            if current_field_index <= len(fields): # Modified condition here
                 task_data = {f['label']: f['value'] for f in fields}
 
                 # --- Input Validation --- (same as before but improved messages & UI feedback)
@@ -361,6 +365,7 @@ def show_task_creation_form(stdscr, task_manager):
 
                 task_info = {
                     'title': task_data['Title'].strip(),
+                    'details': task_data['Details'].strip(), # Get details from form
                     'due': due_date_str if due_date_str else None,
                     'priority': task_data['Priority'],
                     'extra_tags': task_data['Extra Tags (comma-separated)'],
@@ -436,7 +441,7 @@ def main(stdscr):
     curses.init_pair(5, curses.COLOR_RED, -1) # Red for errors
     stdscr.clear()
     stdscr.refresh()
-    task_manager = TaskManager(NOTES_DIR)
+    task_manager = TaskCreator(NOTES_DIR)
 
     task_data = show_task_creation_form(stdscr, task_manager)
 
@@ -447,7 +452,8 @@ def main(stdscr):
             priority=task_data['priority'],
             extra_tags=task_data['extra_tags'],
             contexts=task_data['contexts'],
-            recurrence_data=task_data['recurrence_data']
+            recurrence_data=task_data['recurrence_data'],
+            details=task_data['details'] # Pass details to create_task
         )
         if filepath:
             msg = f"Task created successfully: {filepath}"
