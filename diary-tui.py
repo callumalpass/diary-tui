@@ -468,22 +468,54 @@ class TaskManager:
         return new_tasks
 
     def _background_reindex_task(self):
-        """Background task to re-index tasks."""
+        """Background task to re-index tasks with sorting applied before cache update."""
         if self.is_indexing:
-            return # Prevent overlapping indexing tasks
+            return  # Prevent overlapping indexing tasks
 
         with self.index_lock:
             self.is_indexing = True
             try:
-                logging.info("Starting background task index rebuild.")
+                logging.info("Starting background task index rebuild with sorting.")
                 updated_tasks = self._rebuild_index()
-                self.tasks_cache = updated_tasks # Atomic update of the cache
+
+                # --- Sorting Logic (extracted from filter_tasks and load_tasks) ---
+                def is_overdue(task):
+                    due = task.get("due")
+                    status = self.get_effective_status(task, datetime.now()) # Using datetime.now() as a placeholder, as current_date isn't directly available here.  For background indexing, general overdue status is relevant.
+                    if due and status != "done":
+                         if not isinstance(due, str):
+                             logging.warning(f"WARNING: Task '{task.get('title')}' has a non-string 'due' date: type={type(due)}, value='{due}'. Skipping overdue check.")
+                             return False
+                         try:
+                            due_date = datetime.strptime(due, "%Y-%m-%d")
+                            return due_date.date() < datetime.now().date() # Compare with current date for overdue in background indexer
+                         except ValueError:
+                            logging.warning(f"WARNING: Task '{task.get('title')}' has invalid 'due' date format: value='{due}'. Skipping overdue check.")
+                            return False
+                    return False
+
+                def sort_key(task):
+                    overdue = is_overdue(task)
+                    due = task.get("due")
+                    try:
+                        due_date = datetime.strptime(due, "%Y-%m-%d") if due else datetime.max
+                    except Exception:
+                        due_date = datetime.max
+                    priority = task.get("priority", "normal")
+                    priority_order = {"high": 0, "normal": 1, "low": 2}
+                    return (not overdue, priority_order.get(priority, 1), due_date)
+
+                updated_tasks.sort(key=sort_key)
+                # --- End of Sorting Logic ---
+
+                self.tasks_cache = updated_tasks  # Atomic update of the cache with sorted tasks
                 self.dirty = False
-                logging.info("Background task index rebuild complete.")
+                # logging.info("Background task index rebuild and sort complete.")
             except Exception as e:
-                logging.error(f"Background task index rebuild failed: {e}")
+                logging.error(f"Background task index rebuild with sorting failed: {e}")
             finally:
                 self.is_indexing = False
+
 
     def _start_background_reindex(self):
         """Starts the background re-indexing if not already running."""
@@ -1216,6 +1248,8 @@ class DiaryTUI:
             self.selected_task_index = 0
             self.selected_timeblock_index = 1
             self.non_side_by_side_mode = "timeblock"
+        elif key == ord('i'):
+            self.task_manager.dirty = True
         elif key in (ord('h'), curses.KEY_LEFT):
             self.move_day(-1)
         elif key in (ord('l'), curses.KEY_RIGHT):
