@@ -1207,7 +1207,7 @@ class DiaryTUI:
         elif key in (ord('m'), ord('w'), ord('y')):
             self.current_view = {"m": "month", "w": "week", "y": "year"}[chr(key)]
             self.preview_scroll = 0
-        elif key == ord('o'):
+        elif key == ord('O'):
             self.is_side_by_side = not self.is_side_by_side
             self.preview_scroll = 0
             self.task_pane_focused = False
@@ -1286,7 +1286,7 @@ class DiaryTUI:
             if 0 <= self.selected_timeblock_index < len(tb):
                 t_sel, _ = tb[self.selected_timeblock_index]
                 self.add_timeblock_entry(file_path, date_str, t_sel)
-        elif key == ord('O') and self.task_pane_focused:
+        elif key == ord('o') and self.task_pane_focused:
             self.open_selected_task()
         elif key == ord('R') and self.non_side_by_side_mode == "tasks":
             self.cycle_task_filter()
