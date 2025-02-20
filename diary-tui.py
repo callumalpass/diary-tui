@@ -33,7 +33,8 @@ Features:
   - **TASK ARCHIVING:**
       • Tasks can be archived using the 'A' key or Command Palette.
       • Archived tasks are hidden from default task views.
-      • View archived tasks by cycling task filter to 'archive' using 'R' key.
+        - **INCREMENTAL INDEXING:**
+      • Uses a state file to track file modification times for faster indexing.
 
 Dependencies: curses, yaml, json
 """
@@ -64,13 +65,15 @@ from task_creator import TaskCreator, show_task_creation_form
 # ---------------------------------------------------------------------
 CONFIG_DIR = Path.home() / ".config" / "diary-tui"
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
+INDEX_STATE_FILE = CONFIG_DIR / "index_state.json" # Define index state file
 
 DEFAULT_CONFIG = {
     "diary_dir": str(Path.home() / "diary"),
     "notes_dir": str(Path.home() / "notes"),
     "home_file": str(Path.home() / "notes" / "home.md"),
     "log_file": "/tmp/calendar_tui.log",
-    "editor": "nvim"  # or specify "vi", "nano", etc.
+    "editor": "nvim",  # or specify "vi", "nano", etc.
+    "index_state_file": str(INDEX_STATE_FILE), # Add index state file to config
 }
 
 def load_config():
@@ -99,6 +102,7 @@ NOTES_DIR = Path(CONFIG["notes_dir"])
 HOME_FILE = Path(CONFIG["home_file"])
 LOG_FILE = Path(CONFIG["log_file"])
 EDITOR_CONFIG = CONFIG.get("editor", "").strip()
+INDEX_STATE_FILE = Path(CONFIG["index_state_file"]) # Load index state file path from config
 
 logging.basicConfig(filename=LOG_FILE, level=logging.DEBUG,
                     format='%(asctime)s [%(levelname)s] %(message)s')
@@ -433,20 +437,68 @@ def process_file(file_path_str):
 
 
 class TaskManager:
-    def __init__(self, notes_dir: Path):
+    def __init__(self, notes_dir: Path, index_state_file: Path): # Added index_state_file
         self.notes_dir = notes_dir
+        self.index_state_file = index_state_file # Store index state file path
         self.tasks_cache = []
         self.dirty = True # Initial state is dirty, needs indexing
         self.is_indexing = False
         self.index_lock = threading.Lock()
-        self._start_background_reindex() # Initial index on startup
+
+        # 1. Load the previous index state from disk:
+        self.previous_index_state = self._load_index_state()
+        logging.debug(f"TaskManager.__init__: Initial previous_index_state: {self.previous_index_state}")
+
+        # 2. Start the background re-indexing thread:
+        if not self.is_indexing: # Prevent starting multiple indexing threads
+            self._start_background_reindex() # Initial index on startup
+
+
+    def _load_index_state(self):
+        # """Load the previous index state from JSON file with detailed logging."""
+        # logging.info("Starting _load_index_state (detailed logging enabled) - FORCED FULL INDEX MODE") # Modified log message
+        # logging.debug(f"_load_index_state: Checking for state file at {self.index_state_file}")
+        # if self.index_state_file.exists():
+        #     logging.debug(f"_load_index_state: State file exists, but will be ignored in FULL INDEX MODE.") # Modified log message
+        # else:
+        #     logging.debug(f"_load_index_state: State file does not exist (as expected in FULL INDEX MODE).") # Modified log message
+        # logging.debug(f"_load_index_state: Returning empty state to force full index.") # Added log message
+        # logging.info("_load_index_state: Finished - Returning empty state to force full index.") # Modified log message
+        return {} # Always return empty dict to force full index
+
+
+    def _save_index_state(self, index_state):
+        """Save the current index state to JSON file with detailed logging."""
+        # logging.info("Starting _save_index_state (detailed logging enabled)")
+        # logging.debug(f"_save_index_state: State to be saved: {index_state}") # Log the state being saved
+        try:
+            self.index_state_file.parent.mkdir(parents=True, exist_ok=True) # Ensure directory exists
+            with self.index_state_file.open('w', encoding='utf-8') as f:
+                json.dump(index_state, f, indent=2)
+            # logging.debug(f"_save_index_state: JSON dump successful.")
+            # logging.info(f"_save_index_state: Finished - State saved to {self.index_state_file}.")
+        except Exception as e:
+            logging.error(f"_save_index_state: Error saving index state to {self.index_state_file}: {e}")
+            logging.error(f"_save_index_state: Finished - Error saving state.")
+
+
 
     def _rebuild_index(self):
-        """Scans NOTES_DIR recursively and rebuilds the task index."""
+        """Scans NOTES_DIR incrementally and rebuilds/updates the task index."""
+        current_index_state = {}  # To store current state and save later
+        updated_tasks_metadata = []
         files = list(self.notes_dir.rglob("*.md"))
-        tasks = []
         files_to_process = []
-        exclude_patterns = [ "templates/", ".zk/" ]
+        exclude_patterns = ["templates/", ".zk/"]
+
+        existing_tasks_dict = {task['file_path']: task for task in self.tasks_cache} # Load existing tasks
+
+        is_first_run = not self.previous_index_state # Determine if it's the very first run
+
+        if is_first_run:
+            logging.info("Performing full initial task index rebuild.")
+        # else:
+            # logging.info("Performing incremental task index update.")
 
         for file_path in files:
             is_excluded = False
@@ -454,18 +506,90 @@ class TaskManager:
                 if pattern in str(file_path):
                     is_excluded = True
                     break
-            if not is_excluded:
-                files_to_process.append(file_path)
+            if is_excluded:
+                current_index_state[str(file_path)] = self.previous_index_state.get(str(file_path), None)
+                continue
+
+            try:
+                mod_time = os.path.getmtime(file_path)
+                current_index_state[str(file_path)] = mod_time
+
+                if is_first_run: # For first run, process all files
+                    files_to_process.append(file_path)
+                elif str(file_path) not in self.previous_index_state or self.previous_index_state[str(file_path)] < mod_time:
+                    files_to_process.append(file_path) # Process only new or modified files for incremental updates
+            except OSError:
+                logging.warning(f"Warning: Could not get mod time for {file_path}. Possibly deleted.")
+                if str(file_path) in self.previous_index_state:
+                    logging.info(f"File {file_path} likely deleted, removing from index state and cache.")
+                    if str(file_path) in existing_tasks_dict:
+                        del existing_tasks_dict[str(file_path)]
+                    del self.previous_index_state[str(file_path)]
+
 
         files_to_process.sort()
-        new_tasks = []
+        new_tasks_metadata = []
         with ProcessPoolExecutor(max_workers=8) as executor:
             futures = {executor.submit(process_file, str(f)): f for f in files_to_process}
             for future in as_completed(futures):
                 md = future.result()
                 if md and isinstance(md.get("tags"), list) and "task" in md.get("tags"):
-                    new_tasks.append(md)
-        return new_tasks
+                    new_tasks_metadata.append(md)
+
+        for task_md in new_tasks_metadata:
+            existing_tasks_dict[task_md['file_path']] = task_md
+
+
+        files_in_current_scan = set(str(f) for f in files)
+        cached_files = set(existing_tasks_dict.keys())
+        deleted_files_from_cache = cached_files - files_in_current_scan
+        for deleted_file_path in deleted_files_from_cache:
+            logging.info(f"Removing from cache: deleted file {deleted_file_path}")
+            del existing_tasks_dict[deleted_file_path]
+
+
+        updated_tasks_list = list(existing_tasks_dict.values())
+
+
+        # --- Sorting Logic (extracted from filter_tasks and load_tasks) ---
+        def is_overdue(task):
+            due = task.get("due")
+            status = self.get_effective_status(task, datetime.now())  # Using datetime.now() as a placeholder
+            if due and status != "done":
+                if not isinstance(due, str):
+                    logging.warning(
+                        f"WARNING: Task '{task.get('title')}' has a non-string 'due' date: type={type(due)}, value='{due}'. Skipping overdue check.")
+                    return False
+                try:
+                    due_date = datetime.strptime(due, "%Y-%m-%d")
+                    return due_date.date() < datetime.now().date()  # Compare with current date
+                except ValueError:
+                    logging.warning(
+                        f"WARNING: Task '{task.get('title')}' has invalid 'due' date format: value='{due}'. Skipping overdue check.")
+                    return False
+            return False
+
+        def sort_key(task):
+            overdue = is_overdue(task)
+            due = task.get("due")
+            try:
+                due_date = datetime.strptime(due, "%Y-%m-%d") if due else datetime.max
+            except Exception:
+                due_date = datetime.max
+            priority = task.get("priority", "normal")
+            priority_order = {"high": 0, "normal": 1, "low": 2}
+            return (not overdue, priority_order.get(priority, 1), due_date)
+
+        updated_tasks_list.sort(key=sort_key)
+        # --- End of Sorting Logic ---
+
+        # Save index state *before* updating cache
+        self._save_index_state(current_index_state)
+        self.previous_index_state = current_index_state  # Update previous state for next run
+
+        return updated_tasks_list
+
+
 
     def _background_reindex_task(self):
         """Background task to re-index tasks with sorting applied before cache update."""
@@ -477,37 +601,6 @@ class TaskManager:
             try:
                 logging.info("Starting background task index rebuild with sorting.")
                 updated_tasks = self._rebuild_index()
-
-                # --- Sorting Logic (extracted from filter_tasks and load_tasks) ---
-                def is_overdue(task):
-                    due = task.get("due")
-                    status = self.get_effective_status(task, datetime.now()) # Using datetime.now() as a placeholder, as current_date isn't directly available here.  For background indexing, general overdue status is relevant.
-                    if due and status != "done":
-                         if not isinstance(due, str):
-                             logging.warning(f"WARNING: Task '{task.get('title')}' has a non-string 'due' date: type={type(due)}, value='{due}'. Skipping overdue check.")
-                             return False
-                         try:
-                            due_date = datetime.strptime(due, "%Y-%m-%d")
-                            return due_date.date() < datetime.now().date() # Compare with current date for overdue in background indexer
-                         except ValueError:
-                            logging.warning(f"WARNING: Task '{task.get('title')}' has invalid 'due' date format: value='{due}'. Skipping overdue check.")
-                            return False
-                    return False
-
-                def sort_key(task):
-                    overdue = is_overdue(task)
-                    due = task.get("due")
-                    try:
-                        due_date = datetime.strptime(due, "%Y-%m-%d") if due else datetime.max
-                    except Exception:
-                        due_date = datetime.max
-                    priority = task.get("priority", "normal")
-                    priority_order = {"high": 0, "normal": 1, "low": 2}
-                    return (not overdue, priority_order.get(priority, 1), due_date)
-
-                updated_tasks.sort(key=sort_key)
-                # --- End of Sorting Logic ---
-
                 self.tasks_cache = updated_tasks  # Atomic update of the cache with sorted tasks
                 self.dirty = False
                 # logging.info("Background task index rebuild and sort complete.")
@@ -860,7 +953,7 @@ class DiaryTUI:
         self.fallback_editor = shutil.which("vi") or shutil.which("nano")
         self.task_filter = "all"
         self.context_filter = None
-        self.task_manager = TaskManager(NOTES_DIR) # Using imported TaskManager
+        self.task_manager = TaskManager(NOTES_DIR, INDEX_STATE_FILE) # Pass INDEX_STATE_FILE
         self.task_creator = TaskCreator(NOTES_DIR) # Using imported TaskManager
         self.tasks_list = []
         self.selected_task_index = 0
@@ -1113,7 +1206,7 @@ class DiaryTUI:
             if priority == "high":
                 attr |= curses.color_pair(5)
             elif priority == "low":
-                attr |= curses.color_pair(3) 
+                attr |= curses.color_pair(3)
                 attr |= curses.A_DIM
             else:
                 attr |= curses.color_pair(6)
@@ -1127,7 +1220,8 @@ class DiaryTUI:
                     pass
             line = f"- {mark}{prefix} {title}"
             if self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index:
-                attr |= curses.A_REVERSE
+                attr = curses.A_REVERSE
+                attr = curses.color_pair(3) | curses.A_BOLD
             if due:
                 line += f" (Due: {due})"
             if contexts:
@@ -1250,7 +1344,7 @@ class DiaryTUI:
             self.selected_timeblock_index = 1
             self.non_side_by_side_mode = "timeblock"
         elif key == ord('i'):
-            self.task_manager.dirty = True
+            self.task_manager.dirty = True # Trigger re-index
         elif key in (ord('h'), curses.KEY_LEFT):
             self.move_day(-1)
         elif key in (ord('l'), curses.KEY_RIGHT):
