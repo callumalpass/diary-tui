@@ -1269,6 +1269,10 @@ class DiaryTUI:
                 line += f" (Due: {due})"
             if contexts: # Display contexts if present
                 line += f" ({', '.join(contexts)})"
+            if task.get("recurrence"):
+                if effective_status != "done":
+                    if self.selected_date.date() == datetime.today().date(): # Compare only the date part
+                        attr |= curses.A_BOLD
             try:
                 self.stdscr.addnstr(tasks_y + idx, tasks_x, line, available_width, attr)
             except curses.error:
@@ -1321,6 +1325,10 @@ class DiaryTUI:
                 line += f" (Due: {due})"
             if contexts:
                 line += f" ({', '.join(contexts)})"
+            if task.get("recurrence"):
+                if effective_status != "done":
+                    if self.selected_date.date() == datetime.today().date(): # Compare only the date part
+                        attr |= curses.A_BOLD
             try:
                 self.stdscr.addnstr(tasks_y + idx, tasks_x, line, available_width, attr)
             except curses.error:
