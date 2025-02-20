@@ -590,7 +590,6 @@ class TaskManager:
         return updated_tasks_list
 
 
-
     def _background_reindex_task(self):
         """Background task to re-index tasks with sorting applied before cache update."""
         if self.is_indexing:
@@ -731,6 +730,20 @@ class TaskManager:
                     if status_match and context_match:
                         filtered_tasks.append(task)
         return filtered_tasks
+
+    def get_tasks_due_on_date(self, date_obj: datetime.date) -> list:
+        """Returns a list of tasks due on the given date."""
+        due_tasks = []
+        for task in self.tasks_cache:
+            due_str = task.get("due")
+            if due_str:
+                try:
+                    due_date = datetime.strptime(due_str, "%Y-%m-%d").date()
+                    if due_date == date_obj:
+                        due_tasks.append(task)
+                except ValueError:
+                    logging.warning(f"Invalid due date format '{due_str}' in task: {task.get('title')}")
+        return due_tasks
 
 
     def toggle_task_status(self, task_path: Path):
@@ -930,10 +943,10 @@ class DiaryTUI:
         curses.use_default_colors()
         curses.init_pair(1, curses.COLOR_CYAN, -1)
         curses.init_pair(2, -1, curses.COLOR_CYAN)
-        curses.init_pair(3, curses.COLOR_GREEN, -1)
+        curses.init_pair(3, curses.COLOR_GREEN, -1) # Green for low priority
         curses.init_pair(4, curses.COLOR_MAGENTA, -1)
-        curses.init_pair(5, curses.COLOR_RED, -1)
-        curses.init_pair(6, curses.COLOR_YELLOW, -1)
+        curses.init_pair(5, curses.COLOR_RED, -1)   # Red for high priority
+        curses.init_pair(6, curses.COLOR_YELLOW, -1) # Yellow for normal priority
         curses.init_pair(7, curses.COLOR_WHITE, curses.COLOR_BLUE)
         curses.init_pair(8, curses.COLOR_BLACK, -1)
         curses.init_pair(9, curses.COLOR_BLUE, -1)
@@ -1076,17 +1089,20 @@ class DiaryTUI:
             draw_single_month(self.stdscr, self.cal, self.selected_date.year, self.selected_date.month,
                               start_x, start_y,
                               highlight=(self.selected_date.year, self.selected_date.month, self.selected_date.day),
-                              search_results=self.search_results, tag_results=self.tag_results)
+                              search_results=self.search_results, tag_results=self.tag_results,
+                              task_manager=self.task_manager, current_date=self.selected_date) # Pass task_manager and current_date
             self.calendar_height_non_side = 8
         elif self.current_view == "week":
             draw_week_view(self.stdscr, self.cal, self.selected_date,
-                           start_x, start_y, search_results=self.search_results, tag_results=self.tag_results)
+                           start_x, start_y, search_results=self.search_results, tag_results=self.tag_results,
+                           task_manager=self.task_manager, current_date=self.selected_date) # Pass task_manager and current_date
             self.calendar_height_non_side = 6
         else:
             draw_year_view(self.stdscr, self.cal, self.selected_date.year,
                            start_x, start_y,
                            highlight=(self.selected_date.year, self.selected_date.month, self.selected_date.day),
-                           search_results=self.search_results, tag_results=self.tag_results)
+                           search_results=self.search_results, tag_results=self.tag_results,
+                           task_manager=self.task_manager, current_date=self.selected_date) # Pass task_manager and current_date
             self.calendar_height_non_side = 39
 
     def draw_side_by_side_layout(self, height, width):
@@ -1095,17 +1111,20 @@ class DiaryTUI:
             draw_single_month(self.stdscr, self.cal, self.selected_date.year, self.selected_date.month,
                               2, 2,
                               highlight=(self.selected_date.year, self.selected_date.month, self.selected_date.day),
-                              search_results=self.search_results, tag_results=self.tag_results)
+                              search_results=self.search_results, tag_results=self.tag_results,
+                              task_manager=self.task_manager, current_date=self.selected_date) # Pass task_manager and current_date
             self.calendar_height_side = 8
         elif self.current_view == "week":
             draw_week_view(self.stdscr, self.cal, self.selected_date,
-                           2, 2, search_results=self.search_results, tag_results=self.tag_results)
+                           2, 2, search_results=self.search_results, tag_results=self.tag_results,
+                           task_manager=self.task_manager, current_date=self.selected_date) # Pass task_manager and current_date
             self.calendar_height_side = 6
         else:
             draw_year_view(self.stdscr, self.cal, self.selected_date.year,
                            2, 2,
                            highlight=(self.selected_date.year, self.selected_date.month, self.selected_date.day),
-                           search_results=self.search_results, tag_results=self.tag_results)
+                           search_results=self.search_results, tag_results=self.tag_results,
+                           task_manager=self.task_manager, current_date=self.selected_date) # Pass task_manager and current_date
             self.calendar_height_side = 39
 
     def draw_preview_pane(self, height, width, lines):
@@ -1937,7 +1956,7 @@ class DiaryTUI:
 # CALENDAR DRAWING HELPERS
 # ---------------------------------------------------------------------
 def draw_single_month(stdscr, cal, year, month, start_x, start_y, highlight=None,
-                      search_results=None, tag_results=None):
+                      search_results=None, tag_results=None, task_manager=None, current_date=None): # Added task_manager and current_date
     month_name = calendar.month_name[month]
     title = f"{month_name} {year}"
     try:
@@ -1958,7 +1977,7 @@ def draw_single_month(stdscr, cal, year, month, start_x, start_y, highlight=None
                 continue
             col = start_x + idx * 3
             date_str = f"{year}-{month:02}-{day:02}"
-            attr = get_date_attr(date_str, search_results, tag_results)
+            attr = get_date_attr(date_str, search_results, tag_results, task_manager, datetime(year, month, day).date()) # Pass task_manager and date_obj
             if highlight and (year, month, day) == highlight:
                 attr = curses.color_pair(2) | curses.A_BOLD
             try:
@@ -1967,7 +1986,7 @@ def draw_single_month(stdscr, cal, year, month, start_x, start_y, highlight=None
                 pass
         offset += 1
 
-def draw_week_view(stdscr, cal, selected_date, start_x, start_y, search_results=None, tag_results=None):
+def draw_week_view(stdscr, cal, selected_date, start_x, start_y, search_results=None, tag_results=None, task_manager=None, current_date=None): # Added task_manager and current_date
     dow = (selected_date.weekday() + 1) % 7
     start_week = selected_date - timedelta(days=dow)
     title = f"Week of {start_week.strftime('%Y-%m-%d')} (Sun -> Sat)"
@@ -1978,7 +1997,9 @@ def draw_week_view(stdscr, cal, selected_date, start_x, start_y, search_results=
     for i in range(7):
         day = start_week + timedelta(days=i)
         label = f"{day.strftime('%a')} {day.day}"
-        attr = get_date_attr(day.strftime("%Y-%m-%d"), search_results, tag_results)
+        date_obj = day.date()
+        date_str = day.strftime("%Y-%m-%d")
+        attr = get_date_attr(date_str, search_results, tag_results, task_manager, date_obj) # Pass task_manager and date_obj
         if day.date() == selected_date.date():
             attr = curses.color_pair(2) | curses.A_BOLD
         try:
@@ -1986,7 +2007,7 @@ def draw_week_view(stdscr, cal, selected_date, start_x, start_y, search_results=
         except curses.error:
             pass
 
-def draw_year_view(stdscr, cal, year, start_x, start_y, highlight=None, search_results=None, tag_results=None):
+def draw_year_view(stdscr, cal, year, start_x, start_y, highlight=None, search_results=None, tag_results=None, task_manager=None, current_date=None): # Added task_manager and current_date
     mini_w = 20
     mini_h = 8
     for m in range(1, 13):
@@ -2007,7 +2028,8 @@ def draw_year_view(stdscr, cal, year, start_x, start_y, highlight=None, search_r
                 if day == 0:
                     continue
                 date_str = f"{year}-{m:02}-{day:02}"
-                attr = get_date_attr(date_str, search_results, tag_results)
+                date_obj = datetime(year, m, day).date()
+                attr = get_date_attr(date_str, search_results, tag_results, task_manager, date_obj) # Pass task_manager and date_obj
                 if highlight and (year, m, day) == highlight:
                     attr = curses.color_pair(2) | curses.A_BOLD
                 try:
@@ -2016,7 +2038,24 @@ def draw_year_view(stdscr, cal, year, start_x, start_y, highlight=None, search_r
                     pass
             offset += 1
 
-def get_date_attr(date_str, search_results, tag_results):
+def get_date_attr(date_str, search_results, tag_results, task_manager, date_obj): # Added task_manager and date_obj
+    if task_manager: # Check for due tasks and set color based on priority FIRST, even if no diary entry
+        due_tasks = task_manager.get_tasks_due_on_date(date_obj)
+        if due_tasks:
+            highest_priority = "low" # Default to low if no priority explicitly set
+            priority_order = {"high": 0, "normal": 1, "low": 2}
+            for task in due_tasks:
+                task_priority = task.get("priority", "normal") # Default task priority to normal if not set
+                if priority_order[task_priority] < priority_order[highest_priority]: # Lower index means higher priority
+                    highest_priority = task_priority
+
+            if highest_priority == "high":
+                return curses.color_pair(5) | curses.A_BOLD # Red for high
+            elif highest_priority == "normal":
+                return curses.color_pair(6) | curses.A_BOLD # Yellow for normal
+            elif highest_priority == "low":
+                return curses.color_pair(3) | curses.A_BOLD # Green for low
+
     file_path = DIARY_DIR / f"{date_str}.md"
     if file_path.exists():
         md = metadata_cache.get_metadata(file_path)
@@ -2027,8 +2066,11 @@ def get_date_attr(date_str, search_results, tag_results):
             return curses.color_pair(4) | curses.A_BOLD
         if search_results and date_str in search_results:
             return curses.color_pair(3) | curses.A_BOLD
-        return curses.color_pair(1) | curses.A_BOLD
+        return curses.color_pair(1) | curses.A_BOLD # Default diary entry color
+
     return curses.A_NORMAL
+
+
 
 # ---------------------------------------------------------------------
 # MAIN FUNCTION
