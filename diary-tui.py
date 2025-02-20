@@ -1113,7 +1113,8 @@ class DiaryTUI:
             if priority == "high":
                 attr |= curses.color_pair(5)
             elif priority == "low":
-                attr |= curses.color_pair(3)
+                attr |= curses.color_pair(3) 
+                attr |= curses.A_DIM
             else:
                 attr |= curses.color_pair(6)
             if due:
