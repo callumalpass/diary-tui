@@ -302,7 +302,7 @@ timeblock_cache = TimeblockCache()
 def add_default_timeblock(file_path: Path):
     default_timeblock = [
         "| Time  | Activity |",
-        "| ----- | --------- |",
+        "| ----- | -------- |",
         "| 05:00 |          |",
         "| 05:30 |          |",
         "| 06:00 |          |",
@@ -1262,9 +1262,12 @@ class DiaryTUI:
                 except Exception:
                     pass
             line = f"- {mark}{prefix} {title}"
+            if effective_status == "in-progress":
+                attr = curses.color_pair(1) 
             if self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index:
-                attr | curses.A_REVERSE
+                attr = curses.A_REVERSE
                 attr = curses.color_pair(3) | curses.A_BOLD
+                line = f"> - {mark}{prefix} {title}"
             if due:
                 line += f" (Due: {due})"
             if contexts: # Display contexts if present
@@ -1318,9 +1321,12 @@ class DiaryTUI:
                 except Exception:
                     pass
             line = f"- {mark}{prefix} {title}"
+            if effective_status == "in-progress":
+                attr = curses.color_pair(1) 
             if self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index:
                 attr = curses.A_REVERSE
                 attr = curses.color_pair(3) | curses.A_BOLD
+                line = f"> - {mark}{prefix} {title}"
             if due:
                 line += f" (Due: {due})"
             if contexts:
