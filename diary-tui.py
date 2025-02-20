@@ -924,13 +924,30 @@ def draw_links_menu(stdscr, links):
             return None
 
 def draw_preview(stdscr, lines, start_y, start_x, height, width, scroll):
+    """
+    Draws preview pane content, handling lines with attributes for styling.
+    Expects 'lines' to be a list of either strings or tuples of (string, attribute).
+    """
     max_width = width - start_x - 2
     available = height - start_y - 2
-    for idx, line in enumerate(lines[scroll:scroll + available]):
+    line_num = 0
+    for item in lines[scroll:scroll + available]:
+        if line_num >= available:  # Safety check to prevent writing beyond available lines
+            break
+        attribute = curses.A_NORMAL  # Default attribute
+        line_text = ""
+
+        if isinstance(item, tuple):
+            line_text, attribute = item
+        else:
+            line_text = item
+
         try:
-            stdscr.addnstr(start_y + idx, start_x, line[:max_width], max_width)
+            stdscr.addnstr(start_y + line_num, start_x, line_text[:max_width], max_width, attribute)
         except curses.error:
             pass
+        line_num += 1
+
 
 # ---------------------------------------------------------------------
 # DIARY TUI CLASS (with combined functionality including recurring tasks and contexts)
@@ -1130,12 +1147,65 @@ class DiaryTUI:
     def draw_preview_pane(self, height, width, lines):
         preview_y = 2
         preview_x = (width // 2) + 6
-        draw_preview(self.stdscr, lines, preview_y, preview_x, height, width, self.preview_scroll)
+        # Get tasks due on selected date
+        due_tasks = self.task_manager.get_tasks_due_on_date(self.selected_date.date())
+        task_lines = []
+        if due_tasks:
+            task_lines.append(("--- Tasks Due Today ---", curses.A_BOLD)) # Add attribute here
+            task_lines.append(("", curses.A_NORMAL)) # Add attribute for empty line, though A_NORMAL is default
+
+            for task in due_tasks:
+                priority = task.get("priority", "normal").capitalize()
+                attr = curses.A_NORMAL # Default attribute
+                if priority.lower() == "high":
+                    attr |= curses.color_pair(5) # Red for high priority
+                elif priority.lower() == "normal":
+                    attr |= curses.color_pair(6) # Yellow for normal priority
+                elif priority.lower() == "low":
+                    attr |= curses.color_pair(3) # Green for low priority
+
+                priority = task.get("priority", "normal").capitalize()
+                task_line = f"- {task.get('title')} (Priority: {priority})"
+                task_lines.append((task_line, attr)) # Append as tuple with attribute
+            task_lines.append(("", curses.A_NORMAL)) # Empty line
+            task_lines.append(("--- Diary Entry ---", curses.A_BOLD)) # Add attribute here
+            task_lines.append(("", curses.A_NORMAL)) # Empty line
+
+        # Diary lines remain strings, tasks lines are tuples
+        preview_content_lines = task_lines + lines # Combine task lines (tuples) and diary lines (strings)
+        draw_preview(self.stdscr, preview_content_lines, preview_y, preview_x, height, width, self.preview_scroll)
+
 
     def draw_preview_pane_full(self, height, width, lines):
-        preview_y = self.calendar_height_non_side + 3
+        preview_y = self.calendar_height_non_side + 4
         preview_x = 2
-        draw_preview(self.stdscr, lines, preview_y, preview_x, height, width, self.preview_scroll)
+        # Get tasks due on selected date
+        due_tasks = self.task_manager.get_tasks_due_on_date(self.selected_date.date())
+        task_lines = []
+        if due_tasks:
+            task_lines.append(("--- Tasks Due Today ---", curses.A_BOLD)) # Add attribute here
+            task_lines.append(("", curses.A_NORMAL)) # Add attribute for empty line
+
+            for task in due_tasks:
+                priority = task.get("priority", "normal").capitalize()
+                attr = curses.A_NORMAL # Default attribute
+                if priority.lower() == "high":
+                    attr |= curses.color_pair(5) # Red for high priority
+                elif priority.lower() == "normal":
+                    attr |= curses.color_pair(6) # Yellow for normal priority
+                elif priority.lower() == "low":
+                    attr |= curses.color_pair(3) # Green for low priority
+
+                priority = task.get("priority", "normal").capitalize()
+                task_line = f"- {task.get('title')} (Priority: {priority})"
+                task_lines.append((task_line, attr)) # Append as tuple with attribute
+            task_lines.append(("", curses.A_NORMAL)) # Empty line
+            task_lines.append(("--- Diary Entry ---", curses.A_BOLD)) # Add attribute here
+            task_lines.append(("", curses.A_NORMAL)) # Empty line
+
+        preview_content_lines = task_lines + lines # Combine task lines (tuples) and diary lines (strings)
+        draw_preview(self.stdscr, preview_content_lines, preview_y, preview_x, height, width, self.preview_scroll)
+
 
     def read_tasks_cache(self):
         # Reload tasks using selected_date for recurrence checking and apply filters.
@@ -1151,7 +1221,7 @@ class DiaryTUI:
         time.sleep(1)
 
     def draw_tasks_pane(self, height, width):
-        tasks_y = self.calendar_height_side + 3
+        tasks_y = self.calendar_height_side + 4
         tasks_x = 2
         available_height = height - tasks_y - 1
         available_width = (width // 2) - 4
@@ -1178,6 +1248,7 @@ class DiaryTUI:
                 attr |= curses.color_pair(5)
             elif priority == "low":
                 attr |= curses.color_pair(3)
+                attr |= curses.A_DIM
             else:
                 attr |= curses.color_pair(6)
             if due:
@@ -1186,11 +1257,14 @@ class DiaryTUI:
                     if due_date < datetime.today() and effective_status != "done":
                         attr |= curses.A_BOLD
                         prefix = " !!!"
+                    if due_date.date() == self.selected_date.date():
+                        attr |= curses.A_BOLD
                 except Exception:
                     pass
             line = f"- {mark}{prefix} {title}"
             if self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index:
-                attr |= curses.A_REVERSE
+                attr | curses.A_REVERSE
+                attr = curses.color_pair(3) | curses.A_BOLD
             if due:
                 line += f" (Due: {due})"
             if contexts: # Display contexts if present
@@ -1201,7 +1275,7 @@ class DiaryTUI:
                 pass
 
     def draw_tasks_pane_full(self, height, width):
-        tasks_y = self.calendar_height_non_side + 3
+        tasks_y = self.calendar_height_non_side + 4
         tasks_x = 2
         available_height = height - tasks_y - 3
         available_width = width - 4
@@ -1235,6 +1309,8 @@ class DiaryTUI:
                     if due_date < datetime.today() and effective_status != "done":
                         attr |= curses.A_BOLD
                         prefix = " !!!"
+                    if due_date.date() == self.selected_date.date():
+                        attr |= curses.A_BOLD
                 except Exception:
                     pass
             line = f"- {mark}{prefix} {title}"
