@@ -404,101 +404,73 @@ def process_file(file_path_str):
             if isinstance(md['date'], datetime.date): # Handle datetime.date objects
                 md['date'] = datetime.datetime.combine(md['date'], datetime.time.min).isoformat() # Convert date to datetime, then ISO string
             elif isinstance(md['date'], str): # If it's already a string, assume it's ISO format (or fix later if needed)
-                # No conversion needed if it's already a string and *should* be ISO format
                 pass
-            elif md['date'] is None: # Handle None case (if you want to set a default date, do it here)
-                md['date'] = datetime.datetime.now().isoformat() # Example: Set to current datetime if None
-            else: # For any other type, try to convert to ISO string as a fallback
-                md['date'] = str(md['date']) # Basic string conversion as fallback
+            elif md['date'] is None:
+                md['date'] = datetime.datetime.now().isoformat()
+            else:
+                md['date'] = str(md['date'])
         except Exception as conversion_error:
             logging.error(f"ERROR converting 'date' to ISO string in {file_path_str}: {conversion_error}")
 
         if 'due' in md:
             try:
-                if isinstance(md['due'], datetime.date): # Handle datetime.date objects for 'due' as well
-                    md['due'] = md['due'].strftime("%Y-%m-%d") # Convert date to string in YYYY-MM-DD format
-                elif isinstance(md['due'], str): # If it's already a string, assume it's correct format
-                    # No conversion needed if it's already a string
+                if isinstance(md['due'], datetime.date):
+                    md['due'] = md['due'].strftime("%Y-%m-%d")
+                elif isinstance(md['due'], str):
                     pass
-                elif md['due'] is None: # Handle None case
-                    pass # Keep it as None
-                else: # For any other type, try to convert to string as a fallback (using strftime for date-like objects)
-                    md['due'] = str(md['due']) # Basic string conversion as fallback - might need more robust handling
+                elif md['due'] is None:
+                    pass
+                else:
+                    md['due'] = str(md['due'])
             except ValueError as format_error:
                 logging.error(f"ERROR formatting 'due' date to string in {file_path_str}: {format_error}. Original value: {md['due']}")
-                md['due'] = None # Set to None if formatting fails
+                md['due'] = None
             except Exception as conversion_error:
                 logging.error(f"ERROR converting 'due' to string in {file_path_str}: {conversion_error}")
-                md['due'] = None # Or handle error by setting a default, or removing the 'due' field
+                md['due'] = None
 
-    # Add the file path (as string) so we can refer back to the note.
     md["file_path"] = str(file_path)
     return md
 
 
 class TaskManager:
-    def __init__(self, notes_dir: Path, index_state_file: Path): # Added index_state_file
+    def __init__(self, notes_dir: Path, index_state_file: Path):
         self.notes_dir = notes_dir
-        self.index_state_file = index_state_file # Store index state file path
+        self.index_state_file = index_state_file
         self.tasks_cache = []
-        self.dirty = True # Initial state is dirty, needs indexing
+        self.dirty = True
         self.is_indexing = False
         self.index_lock = threading.Lock()
-
-        # 1. Load the previous index state from disk:
         self.previous_index_state = self._load_index_state()
         logging.debug(f"TaskManager.__init__: Initial previous_index_state: {self.previous_index_state}")
-
-        # 2. Start the background re-indexing thread:
-        if not self.is_indexing: # Prevent starting multiple indexing threads
-            self._start_background_reindex() # Initial index on startup
-
+        if not self.is_indexing:
+            self._start_background_reindex()
 
     def _load_index_state(self):
-        # """Load the previous index state from JSON file with detailed logging."""
-        # logging.info("Starting _load_index_state (detailed logging enabled) - FORCED FULL INDEX MODE") # Modified log message
-        # logging.debug(f"_load_index_state: Checking for state file at {self.index_state_file}")
-        # if self.index_state_file.exists():
-        #     logging.debug(f"_load_index_state: State file exists, but will be ignored in FULL INDEX MODE.") # Modified log message
-        # else:
-        #     logging.debug(f"_load_index_state: State file does not exist (as expected in FULL INDEX MODE).") # Modified log message
-        # logging.debug(f"_load_index_state: Returning empty state to force full index.") # Added log message
-        # logging.info("_load_index_state: Finished - Returning empty state to force full index.") # Modified log message
-        return {} # Always return empty dict to force full index
-
+        return {}
 
     def _save_index_state(self, index_state):
-        """Save the current index state to JSON file with detailed logging."""
-        # logging.info("Starting _save_index_state (detailed logging enabled)")
-        # logging.debug(f"_save_index_state: State to be saved: {index_state}") # Log the state being saved
         try:
-            self.index_state_file.parent.mkdir(parents=True, exist_ok=True) # Ensure directory exists
+            self.index_state_file.parent.mkdir(parents=True, exist_ok=True)
             with self.index_state_file.open('w', encoding='utf-8') as f:
                 json.dump(index_state, f, indent=2)
-            # logging.debug(f"_save_index_state: JSON dump successful.")
-            # logging.info(f"_save_index_state: Finished - State saved to {self.index_state_file}.")
         except Exception as e:
             logging.error(f"_save_index_state: Error saving index state to {self.index_state_file}: {e}")
             logging.error(f"_save_index_state: Finished - Error saving state.")
 
-
-
     def _rebuild_index(self):
-        """Scans NOTES_DIR incrementally and rebuilds/updates the task index."""
-        current_index_state = {}  # To store current state and save later
+        current_index_state = {}
         updated_tasks_metadata = []
         files = list(self.notes_dir.rglob("*.md"))
         files_to_process = []
         exclude_patterns = ["templates/", ".zk/"]
 
-        existing_tasks_dict = {task['file_path']: task for task in self.tasks_cache} # Load existing tasks
+        existing_tasks_dict = {task['file_path']: task for task in self.tasks_cache}
 
-        is_first_run = not self.previous_index_state # Determine if it's the very first run
+        is_first_run = not self.previous_index_state
 
         if is_first_run:
             logging.info("Performing full initial task index rebuild.")
-        # else:
-            # logging.info("Performing incremental task index update.")
 
         for file_path in files:
             is_excluded = False
@@ -514,10 +486,10 @@ class TaskManager:
                 mod_time = os.path.getmtime(file_path)
                 current_index_state[str(file_path)] = mod_time
 
-                if is_first_run: # For first run, process all files
+                if is_first_run:
                     files_to_process.append(file_path)
                 elif str(file_path) not in self.previous_index_state or self.previous_index_state[str(file_path)] < mod_time:
-                    files_to_process.append(file_path) # Process only new or modified files for incremental updates
+                    files_to_process.append(file_path)
             except OSError:
                 logging.warning(f"Warning: Could not get mod time for {file_path}. Possibly deleted.")
                 if str(file_path) in self.previous_index_state:
@@ -525,7 +497,6 @@ class TaskManager:
                     if str(file_path) in existing_tasks_dict:
                         del existing_tasks_dict[str(file_path)]
                     del self.previous_index_state[str(file_path)]
-
 
         files_to_process.sort()
         new_tasks_metadata = []
@@ -539,7 +510,6 @@ class TaskManager:
         for task_md in new_tasks_metadata:
             existing_tasks_dict[task_md['file_path']] = task_md
 
-
         files_in_current_scan = set(str(f) for f in files)
         cached_files = set(existing_tasks_dict.keys())
         deleted_files_from_cache = cached_files - files_in_current_scan
@@ -547,14 +517,11 @@ class TaskManager:
             logging.info(f"Removing from cache: deleted file {deleted_file_path}")
             del existing_tasks_dict[deleted_file_path]
 
-
         updated_tasks_list = list(existing_tasks_dict.values())
 
-
-        # --- Sorting Logic (extracted from filter_tasks and load_tasks) ---
         def is_overdue(task):
             due = task.get("due")
-            status = self.get_effective_status(task, datetime.now())  # Using datetime.now() as a placeholder
+            status = self.get_effective_status(task, datetime.now())
             if due and status != "done":
                 if not isinstance(due, str):
                     logging.warning(
@@ -562,7 +529,7 @@ class TaskManager:
                     return False
                 try:
                     due_date = datetime.strptime(due, "%Y-%m-%d")
-                    return due_date.date() < datetime.now().date()  # Compare with current date
+                    return due_date.date() < datetime.now().date()
                 except ValueError:
                     logging.warning(
                         f"WARNING: Task '{task.get('title')}' has invalid 'due' date format: value='{due}'. Skipping overdue check.")
@@ -581,48 +548,36 @@ class TaskManager:
             return (not overdue, priority_order.get(priority, 1), due_date)
 
         updated_tasks_list.sort(key=sort_key)
-        # --- End of Sorting Logic ---
-
-        # Save index state *before* updating cache
         self._save_index_state(current_index_state)
-        self.previous_index_state = current_index_state  # Update previous state for next run
-
+        self.previous_index_state = current_index_state
         return updated_tasks_list
 
-
     def _background_reindex_task(self):
-        """Background task to re-index tasks with sorting applied before cache update."""
         if self.is_indexing:
-            return  # Prevent overlapping indexing tasks
-
+            return
         with self.index_lock:
             self.is_indexing = True
             try:
                 logging.info("Starting background task index rebuild with sorting.")
                 updated_tasks = self._rebuild_index()
-                self.tasks_cache = updated_tasks  # Atomic update of the cache with sorted tasks
+                self.tasks_cache = updated_tasks
                 self.dirty = False
-                # logging.info("Background task index rebuild and sort complete.")
             except Exception as e:
                 logging.error(f"Background task index rebuild with sorting failed: {e}")
             finally:
                 self.is_indexing = False
 
-
     def _start_background_reindex(self):
-        """Starts the background re-indexing if not already running."""
         if not self.is_indexing:
             thread = threading.Thread(target=self._background_reindex_task)
             thread.daemon = True
             thread.start()
 
     def load_tasks(self, current_date: datetime):
-        """Loads and filters tasks for the current date, considering recurrence."""
         if self.dirty:
-            self._start_background_reindex() # Refresh index in background if dirty
-            return self.tasks_cache # Return current cache immediately (might be outdated but UI remains responsive)
+            self._start_background_reindex()
+            return self.tasks_cache
 
-        # Filtering logic remains mostly the same, but now operates on self.tasks_cache
         tasks = []
         for note in self.tasks_cache:
             if note.get("recurrence"):
@@ -658,7 +613,7 @@ class TaskManager:
             return (not overdue, priority_order.get(priority, 1), due_date)
 
         tasks.sort(key=sort_key)
-        return tasks # Return filtered and sorted tasks, NOT updating self.tasks_cache here.
+        return tasks
 
     def _is_task_due_today(self, task: dict, current_date: datetime) -> bool:
         rec = task.get("recurrence")
@@ -692,9 +647,9 @@ class TaskManager:
             try:
                 orig_date = datetime.strptime(date_value_for_strptime_str, "%Y-%m-%dT%H:%M:%S")
             except Exception as e:
-                orig_date = datetime.combine(current_date.date(), datetime.time.min)  # fallback - ensure datetime
+                orig_date = datetime.combine(current_date.date(), datetime.time.min)
 
-            orig_day = orig_date.day if isinstance(orig_date, (datetime.datetime, datetime.date)) else current_date.day
+            orig_day = orig_date.day if isinstance(orig_date, (datetime,)) else current_date.day
             if current_date.month == orig_date.month and current_date.day == int(rec.get("day_of_month", orig_day)):
                 return True
             else:
@@ -703,20 +658,18 @@ class TaskManager:
             return False
 
     def get_effective_status(self, task: dict, current_date: datetime) -> str:
-        """Gets the effective status of a task, considering recurrence completion."""
         if task.get("recurrence"):
             comp = task.get("complete_instances", [])
             if current_date.strftime("%Y-%m-%d") in comp:
-                return "done" # Today's instance is complete
+                return "done"
             else:
-                return "open" # Today's instance is not complete (but task is recurring)
+                return "open"
         else:
-            return task.get("status", "open") # For non-recurring tasks, use the 'status' field
+            return task.get("status", "open")
 
     def filter_tasks(self, status_filter: str, current_date: datetime, context_filter: str = None):
-        """Filters tasks based on status, archive status and context."""
         filtered_tasks = []
-        loaded_tasks = self.load_tasks(current_date) # Get tasks, which handles background indexing if needed
+        loaded_tasks = self.load_tasks(current_date)
         for task in loaded_tasks:
             is_archived = isinstance(task.get("tags"), list) and "archive" in task.get("tags")
             if status_filter == "archive":
@@ -732,7 +685,6 @@ class TaskManager:
         return filtered_tasks
 
     def get_tasks_due_on_date(self, date_obj: datetime.date) -> list:
-        """Returns a list of tasks due on the given date."""
         due_tasks = []
         for task in self.tasks_cache:
             due_str = task.get("due")
@@ -745,9 +697,7 @@ class TaskManager:
                     logging.warning(f"Invalid due date format '{due_str}' in task: {task.get('title')}")
         return due_tasks
 
-
     def toggle_task_status(self, task_path: Path):
-        """Toggles the status of a task (one-off or recurring)."""
         md = metadata_cache.get_metadata(task_path)
         today_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -765,14 +715,13 @@ class TaskManager:
 
         if metadata_cache.rewrite_front_matter(task_path, md):
             logging.info(f"Updated task status for {task_path}")
-            self.dirty = True # Mark index as dirty after status toggle
+            self.dirty = True
             return True
         else:
             logging.error(f"Failed to update task status for {task_path}")
             return False
 
     def cycle_task_priority(self, task_path: Path):
-        """Cycles through task priorities: low -> normal -> high -> low ..."""
         md = metadata_cache.get_metadata(task_path)
         current_priority = md.get("priority", "normal")
         new_priority = {"low": "normal", "normal": "high", "high": "low"}.get(current_priority, "normal")
@@ -780,25 +729,23 @@ class TaskManager:
 
         if metadata_cache.rewrite_front_matter(task_path, md):
             logging.info(f"Set task {task_path} priority to {new_priority}")
-            self.dirty = True # Mark index as dirty after priority cycle
+            self.dirty = True
             return True
         else:
             logging.error(f"Failed to update task priority for {task_path}")
             return False
 
     def delete_task(self, task_path: Path):
-        """Deletes a task markdown file."""
         try:
             task_path.unlink()
             logging.info(f"Deleted task: {task_path}")
-            self.dirty = True # Mark index as dirty after task deletion
+            self.dirty = True
             return True
         except Exception as e:
             logging.error(f"Error deleting task {task_path}: {e}")
             return False
 
     def archive_task(self, task_path: Path, archive: bool = True):
-        """Sets or unsets the 'archive' tag for a task."""
         md = metadata_cache.get_metadata(task_path)
         tags = md.get("tags", [])
         if not isinstance(tags, list):
@@ -815,7 +762,7 @@ class TaskManager:
 
         if metadata_cache.rewrite_front_matter(task_path, md):
             logging.info(f"Set task {task_path} archive status to {archive}")
-            self.dirty = True # Mark index as dirty after archive status change
+            self.dirty = True
             return True
         else:
             logging.error(f"Failed to update task archive status for {task_path}")
@@ -924,17 +871,13 @@ def draw_links_menu(stdscr, links):
             return None
 
 def draw_preview(stdscr, lines, start_y, start_x, height, width, scroll):
-    """
-    Draws preview pane content, handling lines with attributes for styling.
-    Expects 'lines' to be a list of either strings or tuples of (string, attribute).
-    """
     max_width = width - start_x - 2
     available = height - start_y - 2
     line_num = 0
     for item in lines[scroll:scroll + available]:
-        if line_num >= available:  # Safety check to prevent writing beyond available lines
+        if line_num >= available:
             break
-        attribute = curses.A_NORMAL  # Default attribute
+        attribute = curses.A_NORMAL
         line_text = ""
 
         if isinstance(item, tuple):
@@ -948,7 +891,6 @@ def draw_preview(stdscr, lines, start_y, start_x, height, width, scroll):
             pass
         line_num += 1
 
-
 # ---------------------------------------------------------------------
 # DIARY TUI CLASS (with combined functionality including recurring tasks and contexts)
 # ---------------------------------------------------------------------
@@ -960,10 +902,10 @@ class DiaryTUI:
         curses.use_default_colors()
         curses.init_pair(1, curses.COLOR_CYAN, -1)
         curses.init_pair(2, -1, curses.COLOR_CYAN)
-        curses.init_pair(3, curses.COLOR_GREEN, -1) # Green for low priority
+        curses.init_pair(3, curses.COLOR_GREEN, -1)
         curses.init_pair(4, curses.COLOR_MAGENTA, -1)
-        curses.init_pair(5, curses.COLOR_RED, -1)   # Red for high priority
-        curses.init_pair(6, curses.COLOR_YELLOW, -1) # Yellow for normal priority
+        curses.init_pair(5, curses.COLOR_RED, -1)
+        curses.init_pair(6, curses.COLOR_YELLOW, -1)
         curses.init_pair(7, curses.COLOR_WHITE, curses.COLOR_BLUE)
         curses.init_pair(8, curses.COLOR_BLACK, -1)
         curses.init_pair(9, curses.COLOR_BLUE, -1)
@@ -983,8 +925,8 @@ class DiaryTUI:
         self.fallback_editor = shutil.which("vi") or shutil.which("nano")
         self.task_filter = "all"
         self.context_filter = None
-        self.task_manager = TaskManager(NOTES_DIR, INDEX_STATE_FILE) # Pass INDEX_STATE_FILE
-        self.task_creator = TaskCreator(NOTES_DIR) # Using imported TaskManager
+        self.task_manager = TaskManager(NOTES_DIR, INDEX_STATE_FILE)
+        self.task_creator = TaskCreator(NOTES_DIR)
         self.tasks_list = []
         self.selected_task_index = 0
         self.selected_timeblock_index = 1
@@ -996,8 +938,66 @@ class DiaryTUI:
         self.task_pane_focused = False
         self.timeblock_pane_focused = False
         self.preview_pane_focused = False
-        self.task_indexing_message = "" # For displaying indexing status
+        self.task_indexing_message = ""
 
+    # -----------------------------------------------------------------
+    # DYNAMIC REFRESH TIMING (Instead of fixed 60 seconds)
+    # -----------------------------------------------------------------
+    def calculate_wait_time_until_next_timeblock(self):
+        now = datetime.now()
+        if now.minute < 30:
+            next_boundary = now.replace(minute=30, second=0, microsecond=0)
+        else:
+            next_boundary = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+        wait_time = (next_boundary - now).total_seconds()
+        return max(wait_time, 1)
+
+    def start_refresh_thread(self):
+        self.stop_refresh_thread()
+        wait_time = self.calculate_wait_time_until_next_timeblock()
+        self.refresh_timer = threading.Timer(wait_time, self.refresh_screen)
+        self.refresh_timer.daemon = True
+        self.refresh_timer.start()
+
+    def stop_refresh_thread(self):
+        if self.refresh_timer and self.refresh_timer.is_alive():
+            self.refresh_timer.cancel()
+
+    def refresh_screen(self):
+        height, width = self.stdscr.getmaxyx()
+        if height >= 10 and width >= 60:
+            self.stdscr.clear()
+            if self.is_side_by_side:
+                self.draw_side_by_side_layout(height, width)
+            else:
+                self.draw_layout(height, width)
+            self.draw_divider(height, width)
+            date_str = self.selected_date.strftime("%Y-%m-%d")
+            file_path = DIARY_DIR / f"{date_str}.md"
+            preview_text = get_diary_preview(date_str)
+            lines = preview_text.splitlines()
+            if self.is_side_by_side:
+                self.draw_preview_pane(height, width, lines)
+                if self.show_tasks:
+                    self.draw_tasks_pane(height, width)
+                else:
+                    self.draw_timeblock_pane(height, width)
+            else:
+                if self.non_side_by_side_mode == "preview":
+                    self.draw_preview_pane_full(height, width, lines)
+                elif self.non_side_by_side_mode == "tasks":
+                    self.draw_tasks_pane_full(height, width)
+                elif self.non_side_by_side_mode == "timeblock":
+                    self.draw_timeblock_pane_full(height, width)
+            self.display_status_bar(height, width)
+            self.display_footer(height, width)
+            self.stdscr.refresh()
+        self.start_refresh_thread()
+
+    # -----------------------------------------------------------------
+    # THE REST OF THE DIARYTUI METHODS REMAIN UNCHANGED
+    # (Methods like draw_layout, draw_preview_pane, handle_input, etc.)
+    # -----------------------------------------------------------------
     def get_week_start(self) -> datetime:
         delta = (self.selected_date.weekday() + 1) % 7
         return self.selected_date - timedelta(days=delta)
@@ -1079,7 +1079,7 @@ class DiaryTUI:
                 status_text += "(Archived Tasks)"
             if self.context_filter:
                 status_text += f"| Context Filter: {self.context_filter} "
-        if self.task_indexing_message: # Display indexing message if set
+        if self.task_indexing_message:
             status_text += f"| {self.task_indexing_message} "
 
         try:
@@ -1107,19 +1107,19 @@ class DiaryTUI:
                               start_x, start_y,
                               highlight=(self.selected_date.year, self.selected_date.month, self.selected_date.day),
                               search_results=self.search_results, tag_results=self.tag_results,
-                              task_manager=self.task_manager, current_date=self.selected_date) # Pass task_manager and current_date
+                              task_manager=self.task_manager, current_date=self.selected_date)
             self.calendar_height_non_side = 8
         elif self.current_view == "week":
             draw_week_view(self.stdscr, self.cal, self.selected_date,
                            start_x, start_y, search_results=self.search_results, tag_results=self.tag_results,
-                           task_manager=self.task_manager, current_date=self.selected_date) # Pass task_manager and current_date
+                           task_manager=self.task_manager, current_date=self.selected_date)
             self.calendar_height_non_side = 6
         else:
             draw_year_view(self.stdscr, self.cal, self.selected_date.year,
                            start_x, start_y,
                            highlight=(self.selected_date.year, self.selected_date.month, self.selected_date.day),
                            search_results=self.search_results, tag_results=self.tag_results,
-                           task_manager=self.task_manager, current_date=self.selected_date) # Pass task_manager and current_date
+                           task_manager=self.task_manager, current_date=self.selected_date)
             self.calendar_height_non_side = 39
 
     def draw_side_by_side_layout(self, height, width):
@@ -1129,87 +1129,77 @@ class DiaryTUI:
                               2, 2,
                               highlight=(self.selected_date.year, self.selected_date.month, self.selected_date.day),
                               search_results=self.search_results, tag_results=self.tag_results,
-                              task_manager=self.task_manager, current_date=self.selected_date) # Pass task_manager and current_date
+                              task_manager=self.task_manager, current_date=self.selected_date)
             self.calendar_height_side = 8
         elif self.current_view == "week":
             draw_week_view(self.stdscr, self.cal, self.selected_date,
                            2, 2, search_results=self.search_results, tag_results=self.tag_results,
-                           task_manager=self.task_manager, current_date=self.selected_date) # Pass task_manager and current_date
+                           task_manager=self.task_manager, current_date=self.selected_date)
             self.calendar_height_side = 6
         else:
             draw_year_view(self.stdscr, self.cal, self.selected_date.year,
                            2, 2,
                            highlight=(self.selected_date.year, self.selected_date.month, self.selected_date.day),
                            search_results=self.search_results, tag_results=self.tag_results,
-                           task_manager=self.task_manager, current_date=self.selected_date) # Pass task_manager and current_date
+                           task_manager=self.task_manager, current_date=self.selected_date)
             self.calendar_height_side = 39
 
     def draw_preview_pane(self, height, width, lines):
         preview_y = 2
         preview_x = (width // 2) + 6
-        # Get tasks due on selected date
         due_tasks = self.task_manager.get_tasks_due_on_date(self.selected_date.date())
         task_lines = []
         if due_tasks:
-            task_lines.append(("--- Tasks Due Today ---", curses.A_BOLD)) # Add attribute here
-            task_lines.append(("", curses.A_NORMAL)) # Add attribute for empty line, though A_NORMAL is default
+            task_lines.append(("--- Tasks Due Today ---", curses.A_BOLD))
+            task_lines.append(("", curses.A_NORMAL))
 
             for task in due_tasks:
                 priority = task.get("priority", "normal").capitalize()
-                attr = curses.A_NORMAL # Default attribute
+                attr = curses.A_NORMAL
                 if priority.lower() == "high":
-                    attr |= curses.color_pair(5) # Red for high priority
+                    attr |= curses.color_pair(5)
                 elif priority.lower() == "normal":
-                    attr |= curses.color_pair(6) # Yellow for normal priority
+                    attr |= curses.color_pair(6)
                 elif priority.lower() == "low":
-                    attr |= curses.color_pair(3) # Green for low priority
-
-                priority = task.get("priority", "normal").capitalize()
+                    attr |= curses.color_pair(3)
                 task_line = f"- {task.get('title')} (Priority: {priority})"
-                task_lines.append((task_line, attr)) # Append as tuple with attribute
-            task_lines.append(("", curses.A_NORMAL)) # Empty line
-            task_lines.append(("--- Diary Entry ---", curses.A_BOLD)) # Add attribute here
-            task_lines.append(("", curses.A_NORMAL)) # Empty line
+                task_lines.append((task_line, attr))
+            task_lines.append(("", curses.A_NORMAL))
+            task_lines.append(("--- Diary Entry ---", curses.A_BOLD))
+            task_lines.append(("", curses.A_NORMAL))
 
-        # Diary lines remain strings, tasks lines are tuples
-        preview_content_lines = task_lines + lines # Combine task lines (tuples) and diary lines (strings)
+        preview_content_lines = task_lines + lines
         draw_preview(self.stdscr, preview_content_lines, preview_y, preview_x, height, width, self.preview_scroll)
-
 
     def draw_preview_pane_full(self, height, width, lines):
         preview_y = self.calendar_height_non_side + 4
         preview_x = 2
-        # Get tasks due on selected date
         due_tasks = self.task_manager.get_tasks_due_on_date(self.selected_date.date())
         task_lines = []
         if due_tasks:
-            task_lines.append(("--- Tasks Due Today ---", curses.A_BOLD)) # Add attribute here
-            task_lines.append(("", curses.A_NORMAL)) # Add attribute for empty line
+            task_lines.append(("--- Tasks Due Today ---", curses.A_BOLD))
+            task_lines.append(("", curses.A_NORMAL))
 
             for task in due_tasks:
                 priority = task.get("priority", "normal").capitalize()
-                attr = curses.A_NORMAL # Default attribute
+                attr = curses.A_NORMAL
                 if priority.lower() == "high":
-                    attr |= curses.color_pair(5) # Red for high priority
+                    attr |= curses.color_pair(5)
                 elif priority.lower() == "normal":
-                    attr |= curses.color_pair(6) # Yellow for normal priority
+                    attr |= curses.color_pair(6)
                 elif priority.lower() == "low":
-                    attr |= curses.color_pair(3) # Green for low priority
-
-                priority = task.get("priority", "normal").capitalize()
+                    attr |= curses.color_pair(3)
                 task_line = f"- {task.get('title')} (Priority: {priority})"
-                task_lines.append((task_line, attr)) # Append as tuple with attribute
-            task_lines.append(("", curses.A_NORMAL)) # Empty line
-            task_lines.append(("--- Diary Entry ---", curses.A_BOLD)) # Add attribute here
-            task_lines.append(("", curses.A_NORMAL)) # Empty line
+                task_lines.append((task_line, attr))
+            task_lines.append(("", curses.A_NORMAL))
+            task_lines.append(("--- Diary Entry ---", curses.A_BOLD))
+            task_lines.append(("", curses.A_NORMAL))
 
-        preview_content_lines = task_lines + lines # Combine task lines (tuples) and diary lines (strings)
+        preview_content_lines = task_lines + lines
         draw_preview(self.stdscr, preview_content_lines, preview_y, preview_x, height, width, self.preview_scroll)
 
-
     def read_tasks_cache(self):
-        # Reload tasks using selected_date for recurrence checking and apply filters.
-        self.tasks_list = self.task_manager.filter_tasks(self.task_filter, self.selected_date, self.context_filter) # Apply context filter
+        self.tasks_list = self.task_manager.filter_tasks(self.task_filter, self.selected_date, self.context_filter)
 
     def display_error(self, msg):
         height, width = self.stdscr.getmaxyx()
@@ -1226,24 +1216,23 @@ class DiaryTUI:
         available_height = height - tasks_y - 1
         available_width = (width // 2) - 4
         self.read_tasks_cache()
-        if self.task_manager.is_indexing: # Indicate indexing is in progress
+        if self.task_manager.is_indexing:
             self.task_indexing_message = "Indexing tasks..."
         else:
             self.task_indexing_message = ""
 
         for idx, task in enumerate(self.tasks_list[self.preview_scroll:self.preview_scroll + available_height]):
-            # Mark recurring tasks with * at the start.
             prefix = "[*]" if task.get("recurrence") else ""
             effective_status = self.task_manager.get_effective_status(task, self.selected_date)
             mark = "[x]" if effective_status == "done" else ("[~]" if effective_status == "in-progress" else "[ ]")
             title = task.get("title", "Untitled")
             due = task.get("due", "")
             priority = task.get("priority", "normal")
-            contexts = task.get("contexts", []) # Get contexts
+            contexts = task.get("contexts", [])
             is_archived = isinstance(task.get("tags"), list) and "archive" in task.get("tags")
             attr = curses.A_NORMAL
             if is_archived:
-                attr |= curses.color_pair(8) # Dim archived tasks in archive view if needed
+                attr |= curses.color_pair(8)
             if priority == "high":
                 attr |= curses.color_pair(5)
             elif priority == "low":
@@ -1251,6 +1240,8 @@ class DiaryTUI:
                 attr |= curses.A_DIM
             else:
                 attr |= curses.color_pair(6)
+            if effective_status == "in-progress":
+                attr = curses.color_pair(1)
             if due:
                 try:
                     due_date = datetime.strptime(due, "%Y-%m-%d")
@@ -1262,19 +1253,17 @@ class DiaryTUI:
                 except Exception:
                     pass
             line = f"- {mark}{prefix} {title}"
-            if effective_status == "in-progress":
-                attr = curses.color_pair(1) 
             if self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index:
                 attr = curses.A_REVERSE
                 attr = curses.color_pair(3) | curses.A_BOLD
                 line = f"> - {mark}{prefix} {title}"
             if due:
                 line += f" (Due: {due})"
-            if contexts: # Display contexts if present
+            if contexts:
                 line += f" ({', '.join(contexts)})"
             if task.get("recurrence"):
                 if effective_status != "done":
-                    if self.selected_date.date() == datetime.today().date(): # Compare only the date part
+                    if self.selected_date.date() == datetime.today().date():
                         attr |= curses.A_BOLD
             try:
                 self.stdscr.addnstr(tasks_y + idx, tasks_x, line, available_width, attr)
@@ -1287,7 +1276,7 @@ class DiaryTUI:
         available_height = height - tasks_y - 3
         available_width = width - 4
         self.read_tasks_cache()
-        if self.task_manager.is_indexing: # Indicate indexing is in progress
+        if self.task_manager.is_indexing:
             self.task_indexing_message = "Indexing tasks..."
         else:
             self.task_indexing_message = ""
@@ -1310,6 +1299,8 @@ class DiaryTUI:
                 attr |= curses.A_DIM
             else:
                 attr |= curses.color_pair(6)
+            if effective_status == "in-progress":
+                attr = curses.color_pair(1)
             if due:
                 try:
                     due_date = datetime.strptime(due, "%Y-%m-%d")
@@ -1321,8 +1312,6 @@ class DiaryTUI:
                 except Exception:
                     pass
             line = f"- {mark}{prefix} {title}"
-            if effective_status == "in-progress":
-                attr = curses.color_pair(1) 
             if self.task_pane_focused and (idx + self.preview_scroll) == self.selected_task_index:
                 attr = curses.A_REVERSE
                 attr = curses.color_pair(3) | curses.A_BOLD
@@ -1333,7 +1322,7 @@ class DiaryTUI:
                 line += f" ({', '.join(contexts)})"
             if task.get("recurrence"):
                 if effective_status != "done":
-                    if self.selected_date.date() == datetime.today().date(): # Compare only the date part
+                    if self.selected_date.date() == datetime.today().date():
                         attr |= curses.A_BOLD
             try:
                 self.stdscr.addnstr(tasks_y + idx, tasks_x, line, available_width, attr)
@@ -1453,7 +1442,7 @@ class DiaryTUI:
             self.selected_timeblock_index = 1
             self.non_side_by_side_mode = "timeblock"
         elif key == ord('i'):
-            self.task_manager.dirty = True # Trigger re-index
+            self.task_manager.dirty = True
         elif key in (ord('h'), curses.KEY_LEFT):
             self.move_day(-1)
         elif key in (ord('l'), curses.KEY_RIGHT):
@@ -1487,7 +1476,7 @@ class DiaryTUI:
         elif key == ord('a'):
             self.add_note(file_path, date_str)
         elif key == ord('C'):
-            self.create_new_task() # Now using task_creator form
+            self.create_new_task()
         elif key == ord('T'):
             add_default_timeblock(file_path)
         elif key == ord('t'):
@@ -1674,12 +1663,11 @@ class DiaryTUI:
         finally:
             curses.noecho()
 
-
     def create_new_task(self):
         height, width = self.stdscr.getmaxyx()
-        task_data = show_task_creation_form(self.stdscr, self.task_manager) # Use imported form and task_manager
+        task_data = show_task_creation_form(self.stdscr, self.task_manager)
         if task_data:
-            filepath = self.task_manager.create_task( # Use imported task_manager
+            filepath = self.task_manager.create_task(
                 title=task_data['title'],
                 due=task_data['due'],
                 priority=task_data['priority'],
@@ -1694,7 +1682,6 @@ class DiaryTUI:
                 self.display_error("Failed to create task. Check logs.")
         else:
             self.display_error("Task creation cancelled.")
-
 
     def toggle_task(self):
         self.read_tasks_cache()
@@ -1897,50 +1884,80 @@ class DiaryTUI:
                 self.timeblock_pane_focused = not self.timeblock_pane_focused
                 self.task_pane_focused = False
 
-    def start_refresh_thread(self):
-        self.stop_refresh_thread()
-        self.refresh_timer = threading.Timer(60.0, self.refresh_screen)
-        self.refresh_timer.daemon = True
-        self.refresh_timer.start()
+    def show_week_stats(self, height, width):
+        week_start = self.get_week_start()
+        stats = calculate_week_stats_from_date(week_start)
+        stats_text = (
+            f"Week {stats['week_start']} to {stats['week_end']}\n"
+            f"Pomodoros: {stats['total_pomodoros']}\n"
+            f"Workouts: {stats['total_workouts']}\n"
+            f"Meditated: {stats['days_meditated']}"
+        )
+        popup_h = 7
+        popup_w = 40
+        start_y = (height - popup_h) // 2
+        start_x = (width - popup_w) // 2
+        win = curses.newwin(popup_h, popup_w, start_y, start_x)
+        draw_rectangle(win, 0, 0, popup_h - 1, popup_w - 1)
+        try:
+            win.addstr(2, 2, stats_text)
+        except curses.error:
+            pass
+        win.refresh()
+        win.getch()
+        del win
 
-    def stop_refresh_thread(self):
-        if self.refresh_timer and self.refresh_timer.is_alive():
-            self.refresh_timer.cancel()
+    def perform_context_filter(self, height, width):
+        curses.echo()
+        try:
+            self.stdscr.addstr(height - 1, 2, "Filter by context tag: ")
+            self.stdscr.clrtoeol()
+            context_tag = self.stdscr.getstr(height - 1, 25, 50).decode("utf-8").strip()
+        except Exception as e:
+            logging.error(f"Context filter input error: {e}")
+            context_tag = ""
+        curses.noecho()
+        if context_tag:
+            self.context_filter = context_tag
+        else:
+            self.context_filter = None
+        self.selected_task_index = 0
+        self.preview_scroll = 0
 
-    def refresh_screen(self):
-        height, width = self.stdscr.getmaxyx()
-        if height >= 10 and width >= 60:
-            self.stdscr.clear()
-            if self.is_side_by_side:
-                self.draw_side_by_side_layout(height, width)
-            else:
-                self.draw_layout(height, width)
-            self.draw_divider(height, width)
-            date_str = self.selected_date.strftime("%Y-%m-%d")
-            file_path = DIARY_DIR / f"{date_str}.md"
-            preview_text = get_diary_preview(date_str)
-            lines = preview_text.splitlines()
-            if self.is_side_by_side:
-                self.draw_preview_pane(height, width, lines)
-                if self.show_tasks:
-                    self.draw_tasks_pane(height, width)
-                else:
-                    self.draw_timeblock_pane(height, width)
-            else:
-                if self.non_side_by_side_mode == "preview":
-                    self.draw_preview_pane_full(height, width, lines)
-                elif self.non_side_by_side_mode == "tasks":
-                    self.draw_tasks_pane_full(height, width)
-                elif self.non_side_by_side_mode == "timeblock":
-                    self.draw_timeblock_pane_full(height, width)
-            self.display_status_bar(height, width)
-            self.display_footer(height, width)
-            self.stdscr.refresh()
-        self.start_refresh_thread()
+    def archive_selected_task(self):
+        self.read_tasks_cache()
+        if not self.tasks_list:
+            return
+        if 0 <= self.selected_task_index < len(self.tasks_list):
+            task = self.tasks_list[self.selected_task_index]
+            filename_prefix = task.get("zettelid")
+            for file in NOTES_DIR.glob(f"{filename_prefix}*.md"):
+                if file.is_file():
+                    if self.task_manager.archive_task(file, archive=True):
+                        self.display_error("Task archived.")
+                        self.read_tasks_cache()
+                    break
 
-    # -----------------------------------------------------------------
-    # COMMAND PALETTE
-    # -----------------------------------------------------------------
+    def unarchive_selected_task(self):
+        self.read_tasks_cache()
+        if not self.tasks_list:
+            return
+        if 0 <= self.selected_task_index < len(self.tasks_list):
+            task = self.tasks_list[self.selected_task_index]
+            filename_prefix = task.get("zettelid")
+            for file in NOTES_DIR.glob(f"{filename_prefix}*.md"):
+                if file.is_file():
+                    if self.task_manager.archive_task(file, archive=False):
+                        self.display_error("Task un-archived.")
+                        self.read_tasks_cache()
+                    break
+
+    def toggle_archive_selected_task(self):
+        if self.task_filter == "archive":
+            self.unarchive_selected_task()
+        else:
+            self.archive_selected_task()
+
     def show_command_palette(self, height, width):
         current_file = DIARY_DIR / f"{self.selected_date.strftime('%Y-%m-%d')}.md"
         commands = [
@@ -2007,46 +2024,11 @@ class DiaryTUI:
         self.stdscr.touchwin()
         self.stdscr.refresh()
 
-    def archive_selected_task(self):
-        self.read_tasks_cache()
-        if not self.tasks_list:
-            return
-        if 0 <= self.selected_task_index < len(self.tasks_list):
-            task = self.tasks_list[self.selected_task_index]
-            filename_prefix = task.get("zettelid")
-            for file in NOTES_DIR.glob(f"{filename_prefix}*.md"):
-                if file.is_file():
-                    if self.task_manager.archive_task(file, archive=True):
-                        self.display_error("Task archived.")
-                        self.read_tasks_cache()
-                    break
-
-    def unarchive_selected_task(self):
-        self.read_tasks_cache()
-        if not self.tasks_list:
-            return
-        if 0 <= self.selected_task_index < len(self.tasks_list):
-            task = self.tasks_list[self.selected_task_index]
-            filename_prefix = task.get("zettelid")
-            for file in NOTES_DIR.glob(f"{filename_prefix}*.md"):
-                if file.is_file():
-                    if self.task_manager.archive_task(file, archive=False):
-                        self.display_error("Task un-archived.")
-                        self.read_tasks_cache()
-                    break
-
-    def toggle_archive_selected_task(self):
-        if self.task_filter == "archive":
-            self.unarchive_selected_task()
-        else:
-            self.archive_selected_task()
-
-
 # ---------------------------------------------------------------------
 # CALENDAR DRAWING HELPERS
 # ---------------------------------------------------------------------
 def draw_single_month(stdscr, cal, year, month, start_x, start_y, highlight=None,
-                      search_results=None, tag_results=None, task_manager=None, current_date=None): # Added task_manager and current_date
+                      search_results=None, tag_results=None, task_manager=None, current_date=None):
     month_name = calendar.month_name[month]
     title = f"{month_name} {year}"
     try:
@@ -2067,7 +2049,7 @@ def draw_single_month(stdscr, cal, year, month, start_x, start_y, highlight=None
                 continue
             col = start_x + idx * 3
             date_str = f"{year}-{month:02}-{day:02}"
-            attr = get_date_attr(date_str, search_results, tag_results, task_manager, datetime(year, month, day).date()) # Pass task_manager and date_obj
+            attr = get_date_attr(date_str, search_results, tag_results, task_manager, datetime(year, month, day).date())
             if highlight and (year, month, day) == highlight:
                 attr = curses.color_pair(2) | curses.A_BOLD
             try:
@@ -2076,7 +2058,7 @@ def draw_single_month(stdscr, cal, year, month, start_x, start_y, highlight=None
                 pass
         offset += 1
 
-def draw_week_view(stdscr, cal, selected_date, start_x, start_y, search_results=None, tag_results=None, task_manager=None, current_date=None): # Added task_manager and current_date
+def draw_week_view(stdscr, cal, selected_date, start_x, start_y, search_results=None, tag_results=None, task_manager=None, current_date=None):
     dow = (selected_date.weekday() + 1) % 7
     start_week = selected_date - timedelta(days=dow)
     title = f"Week of {start_week.strftime('%Y-%m-%d')} (Sun -> Sat)"
@@ -2089,7 +2071,7 @@ def draw_week_view(stdscr, cal, selected_date, start_x, start_y, search_results=
         label = f"{day.strftime('%a')} {day.day}"
         date_obj = day.date()
         date_str = day.strftime("%Y-%m-%d")
-        attr = get_date_attr(date_str, search_results, tag_results, task_manager, date_obj) # Pass task_manager and date_obj
+        attr = get_date_attr(date_str, search_results, tag_results, task_manager, date_obj)
         if day.date() == selected_date.date():
             attr = curses.color_pair(2) | curses.A_BOLD
         try:
@@ -2097,7 +2079,7 @@ def draw_week_view(stdscr, cal, selected_date, start_x, start_y, search_results=
         except curses.error:
             pass
 
-def draw_year_view(stdscr, cal, year, start_x, start_y, highlight=None, search_results=None, tag_results=None, task_manager=None, current_date=None): # Added task_manager and current_date
+def draw_year_view(stdscr, cal, year, start_x, start_y, highlight=None, search_results=None, tag_results=None, task_manager=None, current_date=None):
     mini_w = 20
     mini_h = 8
     for m in range(1, 13):
@@ -2119,7 +2101,7 @@ def draw_year_view(stdscr, cal, year, start_x, start_y, highlight=None, search_r
                     continue
                 date_str = f"{year}-{m:02}-{day:02}"
                 date_obj = datetime(year, m, day).date()
-                attr = get_date_attr(date_str, search_results, tag_results, task_manager, date_obj) # Pass task_manager and date_obj
+                attr = get_date_attr(date_str, search_results, tag_results, task_manager, date_obj)
                 if highlight and (year, m, day) == highlight:
                     attr = curses.color_pair(2) | curses.A_BOLD
                 try:
@@ -2128,23 +2110,27 @@ def draw_year_view(stdscr, cal, year, start_x, start_y, highlight=None, search_r
                     pass
             offset += 1
 
-def get_date_attr(date_str, search_results, tag_results, task_manager, date_obj): # Added task_manager and date_obj
-    if task_manager: # Check for due tasks and set color based on priority FIRST, even if no diary entry
+def get_date_attr(date_str, search_results, tag_results, task_manager, date_obj):
+    today = datetime.today().date()
+    if date_obj == today:
+        return curses.color_pair(3) | curses.A_BOLD
+
+    if task_manager:
         due_tasks = task_manager.get_tasks_due_on_date(date_obj)
         if due_tasks:
-            highest_priority = "low" # Default to low if no priority explicitly set
+            highest_priority = "low"
             priority_order = {"high": 0, "normal": 1, "low": 2}
             for task in due_tasks:
-                task_priority = task.get("priority", "normal") # Default task priority to normal if not set
-                if priority_order[task_priority] < priority_order[highest_priority]: # Lower index means higher priority
+                task_priority = task.get("priority", "normal")
+                if priority_order[task_priority] < priority_order[highest_priority]:
                     highest_priority = task_priority
 
             if highest_priority == "high":
-                return curses.color_pair(5) | curses.A_BOLD # Red for high
+                return curses.color_pair(5) | curses.A_BOLD
             elif highest_priority == "normal":
-                return curses.color_pair(6) | curses.A_BOLD # Yellow for normal
+                return curses.color_pair(6) | curses.A_BOLD
             elif highest_priority == "low":
-                return curses.color_pair(3) | curses.A_BOLD # Green for low
+                return curses.color_pair(3) | curses.A_BOLD
 
     file_path = DIARY_DIR / f"{date_str}.md"
     if file_path.exists():
@@ -2156,11 +2142,9 @@ def get_date_attr(date_str, search_results, tag_results, task_manager, date_obj)
             return curses.color_pair(4) | curses.A_BOLD
         if search_results and date_str in search_results:
             return curses.color_pair(3) | curses.A_BOLD
-        return curses.color_pair(1) | curses.A_BOLD # Default diary entry color
+        return curses.color_pair(1)
 
     return curses.A_NORMAL
-
-
 
 # ---------------------------------------------------------------------
 # MAIN FUNCTION

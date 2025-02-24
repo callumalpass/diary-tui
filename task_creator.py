@@ -284,6 +284,7 @@ def show_task_creation_form(stdscr, task_manager):
                 _draw_dropdown_field(form_win, y_offset + i, field["label"], field["value"], field["options"], i == current_field_index, form_width)
             elif field["type"] == "checkboxes":
                 _draw_checkboxes_field(form_win, y_offset + i, field["label"], field["value"], field["options"], i == current_field_index, current_checkbox_index)
+
                 y_offset += 1 # Checkboxes are 2 lines tall
             if i == current_field_index:
                 help_line = field.get("help", "") # Dynamic help line
