@@ -688,10 +688,11 @@ class TaskManager:
         due_tasks = []
         for task in self.tasks_cache:
             due_str = task.get("due")
+            status = task.get("status")
             if due_str:
                 try:
                     due_date = datetime.strptime(due_str, "%Y-%m-%d").date()
-                    if due_date == date_obj:
+                    if due_date == date_obj and status != "done":
                         due_tasks.append(task)
                 except ValueError:
                     logging.warning(f"Invalid due date format '{due_str}' in task: {task.get('title')}")
