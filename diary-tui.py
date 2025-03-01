@@ -793,6 +793,7 @@ def calculate_week_stats_from_date(start_of_week: datetime) -> dict:
         "week_start": start_of_week.strftime("%Y-%m-%d"),
         "week_end": (start_of_week + timedelta(days=6)).strftime("%Y-%m-%d")
     }
+     
 
 def get_diary_preview(date_str: str) -> str:
     file_path = DIARY_DIR / f"{date_str}.md"
@@ -1002,6 +1003,13 @@ class DiaryTUI:
     def get_week_start(self) -> datetime:
         delta = (self.selected_date.weekday() + 1) % 7
         return self.selected_date - timedelta(days=delta)
+
+    def get_month_start(self) -> datetime:
+        """
+        Returns the first day of the month for the selected_date.
+        """
+        return self.selected_date.replace(day=1)
+
 
     def run(self):
         self.start_refresh_thread()
@@ -1429,7 +1437,7 @@ class DiaryTUI:
         elif key == curses.KEY_MOUSE:
             self.handle_mouse()
         elif key == ord('s'):
-            self.show_week_stats(height, width)
+            self.show_month_stats(height, width)
         elif key in (ord('m'), ord('w'), ord('y')):
             self.current_view = {"m": "month", "w": "week", "y": "year"}[chr(key)]
             self.preview_scroll = 0
@@ -1885,19 +1893,19 @@ class DiaryTUI:
                 self.timeblock_pane_focused = not self.timeblock_pane_focused
                 self.task_pane_focused = False
 
-    def show_week_stats(self, height, width):
-        week_start = self.get_week_start()
-        stats = calculate_week_stats_from_date(week_start)
+    def show_month_stats(self, height, width):
+        month_start = self.get_month_start()
+        stats = self.calculate_month_stats_from_date()
         stats_text = (
-            f"Week {stats['week_start']} to {stats['week_end']}\n"
+            f" {stats['month']} Stats\n"
             f"Pomodoros: {stats['total_pomodoros']}\n"
             f"Workouts: {stats['total_workouts']}\n"
             f"Meditated: {stats['days_meditated']}"
         )
         popup_h = 7
         popup_w = 40
-        start_y = (height - popup_h) // 2
-        start_x = (width - popup_w) // 2
+        start_y = (height - popup_h) // 2 + 1
+        start_x = (width - popup_w) // 2 + 1
         win = curses.newwin(popup_h, popup_w, start_y, start_x)
         draw_rectangle(win, 0, 0, popup_h - 1, popup_w - 1)
         try:
@@ -1907,6 +1915,48 @@ class DiaryTUI:
         win.refresh()
         win.getch()
         del win
+
+    def calculate_month_stats_from_date(self) -> dict: 
+        """
+        Calculates monthly stats starting from the start of the month
+        of self.selected_date.
+        """
+        total_pomodoros = 0
+        total_workouts = 0
+        days_meditated = 0
+
+        start_of_month = self.get_month_start() # Get start of month using the method
+
+        current_month = start_of_month.month
+        current_year = start_of_month.year
+        if current_month == 12:
+            next_month = 1
+            next_year = current_year + 1
+        else:
+            next_month = current_month + 1
+            next_year = current_year
+        next_month_start = start_of_month.replace(year=next_year, month=next_month, day=1)
+        end_of_month = next_month_start - timedelta(days=1)
+
+        current_date = start_of_month
+        while current_date <= end_of_month:
+            file_path = DIARY_DIR / f"{current_date.strftime('%Y-%m-%d')}.md"
+            md = metadata_cache.get_metadata(file_path)
+            if md:
+                total_pomodoros += int(md.get("pomodoros", 0))
+                if md.get("workout", False):
+                    total_workouts += 1
+                if md.get("meditate", False):
+                    days_meditated += 1
+            current_date += timedelta(days=1)
+
+        return {
+            "total_pomodoros": total_pomodoros,
+            "total_workouts": total_workouts,
+            "days_meditated": days_meditated,
+            "month": start_of_month.strftime("%B"),
+        }
+
 
     def perform_context_filter(self, height, width):
         curses.echo()

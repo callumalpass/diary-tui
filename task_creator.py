@@ -70,7 +70,7 @@ class TaskCreator:
         frontmatter = {
             "title": title,
             "zettelid": zettelid,
-            "date": now_str,
+            "dateCreated": now_str,
             "dateModified": now_str,
             "status": "open",
             "due": due,
