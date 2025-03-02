@@ -73,12 +73,33 @@ def load_config():
 
 CONFIG = load_config()
 
+NOTES_METADATA_CACHE = {}
+
+def get_note_metadata(file_path: Path):
+    """
+    Returns the metadata for the given file_path.
+    If the file’s modification time has not changed, retrieve the metadata from the cache.
+    Otherwise, re-read the metadata, update the cache, and return it.
+    """
+    try:
+        mtime = file_path.stat().st_mtime
+    except Exception:
+        mtime = 0
+    cached = NOTES_METADATA_CACHE.get(file_path)
+    if cached and cached['mtime'] == mtime:
+        return cached['metadata']
+    # Else, read the metadata using the existing metadata_cache utility.
+    metadata = metadata_cache.get_metadata(file_path)
+    NOTES_METADATA_CACHE[file_path] = {'mtime': mtime, 'metadata': metadata}
+    return metadata
+
 DIARY_DIR = Path(CONFIG["diary_dir"])
 NOTES_DIR = Path(CONFIG["notes_dir"])
 HOME_FILE = Path(CONFIG["home_file"])
 LOG_FILE = Path(CONFIG["log_file"])
 EDITOR_CONFIG = CONFIG.get("editor", "").strip()
 INDEX_STATE_FILE = Path(CONFIG["index_state_file"])  # Load index state file path from config
+
 
 logging.basicConfig(filename=LOG_FILE, level=logging.DEBUG,
                     format='%(asctime)s [%(levelname)s] %(message)s')
@@ -1190,22 +1211,42 @@ class DiaryTUI:
         preview_content_lines = task_lines + lines
         draw_preview(self.stdscr, preview_content_lines, preview_y, preview_x, height, width, self.preview_scroll)
 
-    # NEW: Methods to load and display note files based on their “dateCreated”
+
+
     def read_notes_cache(self):
+        """
+        Populate self.notes_list with all non-task note metadata for the selected date.
+        Uses caching to skip re-parsing note files that have not changed.
+        """
+        import os
+        import datetime
+
         self.notes_list = []
         selected_str = self.selected_date.strftime("%Y-%m-%d")
         for file in NOTES_DIR.glob("*.md"):
-            md = metadata_cache.get_metadata(file)
-            # Exclude files that are tasks (i.e. contain tag "task")
+            md = get_note_metadata(file)
+            # Exclude files that are tasks (i.e. contain the tag "task")
             if isinstance(md.get("tags"), list) and "task" in md.get("tags"):
                 continue
             date_created = md.get("dateCreated")
-            if isinstance(date_created, str) and date_created.startswith(selected_str):
-                md["file_path"] = str(file)
-                self.notes_list.append(md)
-        # Sort by title or modification time as desired
+            # Ensure we have a string for comparison: if it's a datetime, convert it
+            if date_created:
+                if isinstance(date_created, datetime.datetime):
+                    date_str = date_created.isoformat()
+                elif isinstance(date_created, str):
+                    date_str = date_created
+                else:
+                    # If date_created is neither str nor datetime, skip this note
+                    continue
+
+                if date_str.startswith(selected_str):
+                    md["file_path"] = str(file)
+                    self.notes_list.append(md)
+        # Sort notes by title (or you could sort by modification time, etc.)
         self.notes_list.sort(key=lambda x: x.get("title", os.path.basename(x["file_path"])))
         return self.notes_list
+
+
 
     def draw_notes_pane(self, height, width):
         # In side-by-side mode: left pane for notes list
@@ -1216,14 +1257,57 @@ class DiaryTUI:
         available_width = (width // 2) - 4
         for idx, note in enumerate(self.notes_list[self.preview_scroll:self.preview_scroll + available_height]):
             title = note.get("title", Path(note.get("file_path", "")).stem)
+            tags = note.get("tags", []) # Default to empty list if 'tags' is missing or malformed
+
+            if not isinstance(tags, list): # Handle malformed tags field
+                tags = []
+
+            tags_str = ", ".join(tags)
+            display_text = title
+            if tags_str:
+                display_text += f", {tags_str}"
+
             attr = curses.A_NORMAL
             if self.note_pane_focused and (idx + self.preview_scroll) == self.selected_note_index:
-                attr = curses.A_REVERSE | curses.color_pair(3) | curses.A_BOLD
-                title = f"> {title}"
+                attr = curses.color_pair(3) | curses.A_BOLD
+                display_text = f"> {display_text}"
+
+            # Separate title and tags for color formatting
+            title_part = display_text
+            tags_part = ""
+            if ", " in display_text and display_text.startswith("> "): # handle the "> " prefix
+                parts = display_text[2:].split(", ", 1)
+                if len(parts) > 1:
+                    title_part = "> " + parts[0]
+                    tags_part = ", " + parts[1]
+                else:
+                    title_part = display_text
+                    tags_part = ""
+            elif ", " in display_text:
+                parts = display_text.split(", ", 1)
+                if len(parts) > 1:
+                    title_part = parts[0]
+                    tags_part = ", " + parts[1]
+                else:
+                    title_part = display_text
+                    tags_part = ""
+            else:
+                title_part = display_text
+                tags_part = ""
+
+
             try:
-                self.stdscr.addnstr(pane_y + idx, pane_x, title, available_width, attr)
+                self.stdscr.addnstr(pane_y + idx, pane_x, title_part, available_width, attr)
+                if tags_part:
+                    tags_attr = curses.color_pair(4) # Use color pair 4 for tags (magenta)
+                    start_pos = pane_x + len(title_part)
+                    remaining_width = max(0, available_width - len(title_part)) # Ensure non-negative width
+                    self.stdscr.addnstr(pane_y + idx, start_pos, tags_part, remaining_width, tags_attr)
+
+
             except curses.error:
                 pass
+
 
     def draw_notes_pane_full(self, height, width):
         self.read_notes_cache()
@@ -1233,12 +1317,54 @@ class DiaryTUI:
         available_width = width - 4
         for idx, note in enumerate(self.notes_list[self.preview_scroll:self.preview_scroll + available_height]):
             title = note.get("title", Path(note.get("file_path", "")).stem)
+            tags = note.get("tags", []) # Default to empty list if 'tags' is missing or malformed
+
+            if not isinstance(tags, list): # Handle malformed tags field
+                tags = []
+
+            tags_str = ", ".join(tags)
+            display_text = title
+            if tags_str:
+                display_text += f", {tags_str}"
+
             attr = curses.A_NORMAL
             if self.note_pane_focused and (idx + self.preview_scroll) == self.selected_note_index:
-                attr = curses.A_REVERSE | curses.color_pair(3) | curses.A_BOLD
-                title = f"> {title}"
+                attr = curses.color_pair(3) | curses.A_BOLD
+                display_text = f"> {display_text}"
+
+            # Separate title and tags for color formatting
+            title_part = display_text
+            tags_part = ""
+            if ", " in display_text and display_text.startswith("> "): # handle the "> " prefix
+                parts = display_text[2:].split(", ", 1)
+                if len(parts) > 1:
+                    title_part = "> " + parts[0]
+                    tags_part = ", " + parts[1]
+                else:
+                    title_part = display_text
+                    tags_part = ""
+            elif ", " in display_text:
+                parts = display_text.split(", ", 1)
+                if len(parts) > 1:
+                    title_part = parts[0]
+                    tags_part = ", " + parts[1]
+                else:
+                    title_part = display_text
+                    tags_part = ""
+            else:
+                title_part = display_text
+                tags_part = ""
+
+
             try:
-                self.stdscr.addnstr(pane_y + idx, pane_x, title, available_width, attr)
+                self.stdscr.addnstr(pane_y + idx, pane_x, title_part, available_width, attr)
+                if tags_part:
+                    tags_attr = curses.color_pair(4) # Use color pair 4 for tags (magenta)
+                    start_pos = pane_x + len(title_part)
+                    remaining_width = max(0, available_width - len(title_part)) # Ensure non-negative width
+                    self.stdscr.addnstr(pane_y + idx, start_pos, tags_part, remaining_width, tags_attr)
+
+
             except curses.error:
                 pass
 
