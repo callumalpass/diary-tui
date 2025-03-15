@@ -63,19 +63,44 @@ editor: "nvim"                                # Preferred editor (e.g., "nvim", 
 2. **Edit the file:** Open the file in a text editor and modify the values to match your setup.
 3. **Save the file.**
 
+## Installation
+
+You can install `diary-tui` using pip:
+
+```bash
+pip install diary-tui
+```
+
+Or install from the source:
+
+```bash
+git clone https://github.com/username/diary-tui.git
+cd diary-tui
+pip install .
+```
+
 ## Usage
 
-1. **Make the script executable:**
-   ```bash
-   chmod +x diary_tui.py
-   ```
+After installation, you can run the application using the provided command:
 
-2. **Run the script:**
-   ```bash
-   ./diary_tui.py
-   ```
+```bash
+diary-tui
+```
 
-3. **Navigate and use the application:** Use the keybindings listed below to interact with the diary TUI.
+To create a new task:
+
+```bash
+task-creator
+```
+
+You can also use it as a module:
+
+```python
+from diary_tui import main
+main()
+```
+
+**Navigate and use the application:** Use the keybindings listed below to interact with the diary TUI.
 
 ## Keybindings and Commands
 

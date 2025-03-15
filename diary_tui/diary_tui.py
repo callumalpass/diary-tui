@@ -73,25 +73,7 @@ def load_config():
 
 CONFIG = load_config()
 
-NOTES_METADATA_CACHE = {}
 
-def get_note_metadata(file_path: Path):
-    """
-    Returns the metadata for the given file_path.
-    If the file’s modification time has not changed, retrieve the metadata from the cache.
-    Otherwise, re-read the metadata, update the cache, and return it.
-    """
-    try:
-        mtime = file_path.stat().st_mtime
-    except Exception:
-        mtime = 0
-    cached = NOTES_METADATA_CACHE.get(file_path)
-    if cached and cached['mtime'] == mtime:
-        return cached['metadata']
-    # Else, read the metadata using the existing metadata_cache utility.
-    metadata = metadata_cache.get_metadata(file_path)
-    NOTES_METADATA_CACHE[file_path] = {'mtime': mtime, 'metadata': metadata}
-    return metadata
 
 DIARY_DIR = Path(CONFIG["diary_dir"])
 NOTES_DIR = Path(CONFIG["notes_dir"])
@@ -107,11 +89,30 @@ logging.basicConfig(filename=LOG_FILE, level=logging.DEBUG,
 # ---------------------------------------------------------------------
 # YAML FRONTMATTER UTILITIES
 # ---------------------------------------------------------------------
+NOTES_METADATA_CACHE = {}
 class MetadataCache:
     def __init__(self):
         self.cache = {}
         self.file_hashes = {}
         self.file_mod_times = {}
+
+    def get_note_metadata(self, file_path: Path):
+        """
+        Returns the metadata for the given file_path.
+        If the file’s modification time has not changed, retrieve the metadata from the cache.
+        Otherwise, re-read the metadata, update the cache, and return it.
+        """
+        try:
+            mtime = file_path.stat().st_mtime
+        except Exception:
+            mtime = 0
+        cached = NOTES_METADATA_CACHE.get(file_path)
+        if cached and cached['mtime'] == mtime:
+            return cached['metadata']
+        # Else, read the metadata using the existing metadata_cache utility.
+        metadata = self.get_metadata(file_path)
+        NOTES_METADATA_CACHE[file_path] = {'mtime': mtime, 'metadata': metadata}
+        return metadata
 
     def get_metadata(self, file_path: Path) -> dict:
         if not file_path.exists():
@@ -1224,7 +1225,7 @@ class DiaryTUI:
         self.notes_list = []
         selected_str = self.selected_date.strftime("%Y-%m-%d")
         for file in NOTES_DIR.glob("*.md"):
-            md = get_note_metadata(file)
+            md = metadata_cache.get_note_metadata(file)
             # Exclude files that are tasks (i.e. contain the tag "task")
             if isinstance(md.get("tags"), list) and "task" in md.get("tags"):
                 continue
@@ -1733,8 +1734,7 @@ class DiaryTUI:
             self.task_pane_focused = True
             self.timeblock_pane_focused = False
         elif key == ord('3'):
-            if not self.is_side_by_side():
-                self.non_side_by_side_mode = "preview"
+            self.non_side_by_side_mode = "preview"
         elif key in (10, 13):
             if self.task_pane_focused:
                 self.toggle_task()
@@ -2464,14 +2464,18 @@ def get_date_attr(date_str, search_results, tag_results, task_manager, date_obj)
 # ---------------------------------------------------------------------
 # MAIN FUNCTION
 # ---------------------------------------------------------------------
-def main(stdscr):
+def main_curses(stdscr):
     tui = DiaryTUI(stdscr)
     tui.run()
 
-if __name__ == "__main__":
+def main():
+    """Entry point for the application when run as a module."""
     try:
-        curses.wrapper(main)
+        curses.wrapper(main_curses)
     except Exception as e:
         logging.critical(f"Unhandled exception: {e}")
         sys.exit(1)
+
+if __name__ == "__main__":
+    main()
 

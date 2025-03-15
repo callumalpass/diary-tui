@@ -468,10 +468,14 @@ def main(stdscr):
     stdscr.refresh()
     stdscr.getch()
 
-if __name__ == "__main__":
+def main_cli():
+    """Entry point for the task creator when run as a module."""
     try:
         curses.wrapper(main)
     except Exception as e:
         logging.critical(f"Unhandled exception: {e}")
         sys.exit(1)
+
+if __name__ == "__main__":
+    main_cli()
 
