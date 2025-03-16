@@ -1,144 +1,196 @@
-# Diary TUI - Terminal-Based Diary and Time Management
+# Diary TUI - Terminal-Based Personal Knowledge & Task Management
 
-This Python script, `diary_tui.py`, is a terminal-based diary and time management application designed for efficient note-taking, task management, and calendar viewing directly from your terminal. It's inspired by plain text note-taking workflows and aims to provide a fast and distraction-free environment for daily planning and reflection.
+Diary TUI is a feature-rich terminal application for managing notes, tasks, and daily schedules. It provides an integrated environment for personal knowledge management and productivity tracking.
 
 ## Features
 
-- **Daily Diary Entries:** Create and manage daily diary entries stored as Markdown files with YAML frontmatter for metadata (tags, pomodoros, etc.).
-- **Timeblock Management:**  Plan your day with timeblocks within your diary entries. Easily add, update, and view your daily schedule.
-- **Task Management:**  Integrated task list (stored in a separate Markdown file) with completion toggling.
-- **Multiple Calendar Views:**
-    - **Year View:**  Overview of the entire year with day highlighting.
-    - **Month View:**  Detailed month calendar with day selection.
-    - **Week View:**  Focus on the current week's schedule and days.
-- **Search and Tag Filtering:**
-    - **Search:** Quickly find diary entries by keywords in content or metadata.
-    - **Tag Filtering:**  Filter diary entries by tags for focused views.
-- **Side-by-Side and Fullscreen Modes:**
-    - **Side-by-Side:** View calendar alongside diary preview, tasks, or timeblocks.
-    - **Fullscreen:** Maximize preview, tasks, or timeblock views for focused work.
-- **Obsidian-Style Link Parsing:**  Supports `[[link]]` and `[[link|display text]]` syntax for internal linking between diary entries and notes within your notes directory.
-- **Editor Integration:**  Opens diary entries and linked notes in your preferred editor (configured in `config.yaml`). Designed to work well with Neovim (via `--server` and `--remote`), but falls back to `vi` or `nano` if available.
-- **Live Screen Refresh:**  Automatically refreshes the screen periodically to reflect changes in diary files or tasks.
-- **Mouse Support:**  Basic mouse interaction for navigation (scrolling).
-- **Context-Aware Command Palette (Ctrl+P):**  Quickly access a list of commands relevant to your current context within the application.
-- **Robust Error Handling and Logging:**  Logs errors to `/tmp/calendar_tui.log` for debugging and issue tracking.
+### Diary Management
+- **Daily Entries**: Create and manage daily diary entries with YAML frontmatter metadata
+- **Metadata Tracking**: Track metrics like pomodoros, meditation sessions, and workouts
+- **Timeblocking**: Plan your day with timeblocks to schedule activities
 
-## Dependencies
+### Task Management
+- **Task Creation**: Create tasks with title, due date, priority, and context tags
+- **Recurrence Support**: Set up recurring tasks (daily, weekly, monthly, yearly)
+- **Status Tracking**: Track task status (open, in-progress, done)
+- **Due Date Management**: Visual indicators for upcoming and overdue tasks
 
-- **Python 3:**  Requires Python 3.
-- **curses:**  Usually pre-installed on most Unix-like systems.
-- **PyYAML:**  For YAML frontmatter parsing and manipulation. Install with:
-  ```bash
-  pip install pyyaml
-  ```
+### Notes Management
+- **Markdown Support**: Create and edit notes in markdown format
+- **YAML Frontmatter**: Organize notes with metadata
+- **Internal Linking**: Supports `[[link]]` and `[[link|display text]]` syntax
+- **Notes View**: See files created on the selected date
 
-## Configuration
+### Calendar Views
+- **Multiple Views**: Year, month, and week calendar views
+- **Visual Indicators**: Highlight days with entries, tasks, and current selection
+- **Statistics**: View monthly statistics for tracked metrics
 
-The script uses a configuration file located at `~/.config/diary-tui/config.yaml`. If the directory or file doesn't exist, it will be created with default values on the first run.
-
-Here's the default configuration structure:
-
-```yaml
-diary_dir: "/home/calluma/Dropbox/notes/diary" # Path to your diary entries directory
-notes_dir: "/home/calluma/Dropbox/notes"       # Path to your general notes directory (for linking)
-tasks_file: "/home/calluma/Dropbox/notes/o7qtm.md" # Path to your tasks Markdown file
-home_file: "/home/calluma/Dropbox/notes/home.md"   # Path to your "home" or main notes file
-log_file: "/tmp/calendar_tui.log"            # Path to the log file
-editor: "nvim"                                # Preferred editor (e.g., "nvim", "vi", "nano", or leave empty for auto-detection)
-```
-
-**Configuration Options:**
-
-- **`diary_dir`:**  **Required.**  Set this to the absolute path of the directory where you store your daily diary entries. Diary entries should be named in `YYYY-MM-DD.md` format.
-- **`notes_dir`:** **Required.** Set this to the absolute path of your general notes directory. This is used for resolving internal links.
-- **`tasks_file`:** **Required.**  Set this to the absolute path of the Markdown file where you keep your tasks. Tasks should be formatted as Markdown lists (`- [ ] Task description` or `- [x] Completed task`).
-- **`home_file`:** **Required.** Set this to the absolute path of your "home" or main notes file. This file can be quickly opened with the `1` key.
-- **`log_file`:**  Optional. Path to the log file. Defaults to `/tmp/calendar_tui.log`.
-- **`editor`:** Optional.  Specify your preferred terminal editor (e.g., "nvim", "vi", "nano"). If left empty, the script will attempt to auto-detect `nvim`, `vi`, or `nano` in that order.  Ensure your editor is in your system's `$PATH`.
-
-**To customize the configuration:**
-
-1. **Locate the configuration file:** `~/.config/diary-tui/config.yaml`.
-2. **Edit the file:** Open the file in a text editor and modify the values to match your setup.
-3. **Save the file.**
+### User Interface
+- **Flexible Layout**: Side-by-side or full-screen modes based on terminal width
+- **Split Panels**: View calendar alongside diary entries, tasks, or timeblocks
+- **Command Palette**: Quick access to commands with Ctrl+P
+- **Search**: Find content across entries with keyword search
+- **Tag Filtering**: Filter entries by tags for focused views
 
 ## Installation
 
-You can install `diary-tui` using pip:
-
-```bash
-pip install diary-tui
-```
-
-Or install from the source:
-
+### From Source
 ```bash
 git clone https://github.com/username/diary-tui.git
 cd diary-tui
 pip install .
 ```
 
+## Configuration
+
+Diary TUI uses a configuration file at `~/.config/diary-tui/config.yaml`. The file will be created with default values on first run.
+
+Configuration options:
+- `diary_dir`: Directory for daily diary entries (format: YYYY-MM-DD.md)
+- `notes_dir`: Directory for general markdown notes
+- `tasks_file`: Path to your tasks file (optional)
+- `home_file`: Path to your main notes file (optional)
+- `log_file`: Path for application logs (default: /tmp/calendar_tui.log)
+- `editor`: Your preferred editor (default: auto-detects nvim, vi, or nano)
+
 ## Usage
 
-After installation, you can run the application using the provided command:
-
+### Launch the application
 ```bash
 diary-tui
 ```
 
-To create a new task:
-
+### Create a new task
 ```bash
 task-creator
 ```
 
-You can also use it as a module:
+### Key Bindings
 
-```python
-from diary_tui import main
-main()
+#### Navigation
+- `h/←`: Previous day
+- `l/→`: Next day
+- `j/↓`: Next week / Navigate down in tasks
+- `k/↑`: Previous week / Navigate up in tasks
+- `t`: Jump to today
+
+#### Views
+- `m`: Month view
+- `w`: Week view
+- `y`: Year view
+- `o`: Toggle side-by-side layout
+- `-`: Toggle tasks/timeblock pane
+- `0`: Switch focus between panes
+
+#### Content Management
+- `a`: Add note to current diary entry
+- `A`: Add task to tasks file
+- `T`: Add timeblock template
+- `e`: Edit current diary entry
+- `ENTER`: Toggle task completion / Edit timeblock
+
+#### Search and Organization
+- `/`: Search diary entries
+- `n/p`: Navigate search results
+- `f`: Filter by tag
+- `s`: Show statistics
+
+#### Metadata Tracking
+- `M`: Toggle meditation status
+- `W`: Toggle workout status
+- `P`: Increment pomodoro count
+- `I`: Toggle "important" tag
+
+#### Other
+- `?`: Show help
+- `Ctrl+P`: Open command palette
+- `q`: Quit application
+
+## File Formats
+
+### Diary Entries
+
+Diary entries use Markdown with YAML frontmatter for metadata. Files are stored in the `diary_dir` directory with the format `YYYY-MM-DD.md`.
+
+```markdown
+---
+date: 2023-01-01
+meditate: true
+workout: false
+pomodoros: 3
+tags: [daily, planning]
+important: true
+---
+
+# Sunday, January 1, 2023
+
+## Notes
+
+This is a good place for general thoughts about the day.
+
 ```
 
-**Navigate and use the application:** Use the keybindings listed below to interact with the diary TUI.
+### Tasks
 
-## Keybindings and Commands
+Tasks are stored as individual Markdown files with YAML frontmatter. They can be created with the `task-creator` command.
 
-| Keybinding | Action                                     |
-|------------|---------------------------------------------|
-| `h` / `LEFT` | Move to the previous day                  |
-| `l` / `RIGHT`| Move to the next day                     |
-| `j` / `DOWN` | Move down one week / Navigate tasks/timeblocks down |
-| `k` / `UP`   | Move up one week / Navigate tasks/timeblocks up   |
-| `m`          | Switch to Month View                      |
-| `w`          | Switch to Week View                       |
-| `y`          | Switch to Year View                       |
-| `o`          | Toggle side-by-side layout               |
-| `a`          | Add a note to the current diary entry     |
-| `A`          | Add a task to your tasks file             |
-| `T`          | Add an empty timeblock template to the diary entry |
-| `e`          | Edit the current diary entry in your editor |
-| `t`          | Jump to today's date                      |
-| `/`          | Initiate a diary search                   |
-| `n`          | Navigate to the next search result       |
-| `p`          | Navigate to the previous search result   |
-| `f`          | Filter diary entries by tag               |
-| `M`          | Toggle 'meditate' metadata for the day    |
-| `W`          | Toggle 'workout' metadata for the day     |
-| `P`          | Increment 'pomodoros' metadata for the day|
-| `I`          | Toggle 'important' tag for the day       |
-| `L`          | List internal links in the current entry  |
-| `0`          | Toggle focus between calendar/preview/tasks/timeblock panes |
-| `-`          | Toggle tasks/timeblock pane (or cycle preview/tasks/timeblock in fullscreen mode)|
-| `ENTER` (in Tasks pane) | Toggle task completion |
-| `ENTER` (in Timeblock pane) | Edit activity for selected timeblock |
-| `1`          | Open your 'home_file' in your editor     |
-| `2`          | Open your 'tasks_file' in your editor    |
-| `s`          | Show weekly statistics popup              |
-| `?`          | Show this help screen                     |
-| `u` / `d`    | Scroll preview pane up/down (line by line)|
-| `U` / `D`    | Scroll preview pane up/down (5 lines at a time)|
-| `Ctrl+P`     | Open the command palette                  |
-| `q`          | Quit the application                      |
+```markdown
+---
+title: Complete project proposal
+zettelid: 230101abc
+dateCreated: 2023-01-01T14:30:00
+dateModified: 2023-01-01T14:30:00
+status: open
+due: 2023-01-15
+tags: [task, work, project]
+priority: high
+contexts: [office, computer]
+---
 
+# Complete project proposal
 
+Draft the proposal for the new client project, including:
+
+- Timeline estimates
+- Budget breakdown
+- Resource requirements
+- Deliverables schedule
+```
+
+### Recurring Tasks
+
+Tasks can include recurrence data in the YAML frontmatter:
+
+```markdown
+---
+title: Weekly team meeting
+zettelid: 230105xyz
+dateCreated: 2023-01-05T09:15:00
+dateModified: 2023-01-05T09:15:00
+status: open
+tags: [task, meeting, team]
+priority: normal
+contexts: [work, zoom]
+recurrence:
+  frequency: weekly
+  days_of_week: [mon]
+complete_instances: []
+---
+
+# Weekly team meeting
+
+- Review sprint progress
+- Discuss blockers
+- Plan next week's work
+```
+
+## Dependencies
+
+- Python 3.6+
+- PyYAML (for configuration and frontmatter)
+- curses (included with Python on most systems)
+
+## License
+
+MIT
