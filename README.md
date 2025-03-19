@@ -16,10 +16,10 @@ Diary TUI is a feature-rich terminal application for managing notes, tasks, and 
 - **Due Date Management**: Visual indicators for upcoming and overdue tasks
 
 ### Notes Management
+- **Notes View**: See files created on the selected date
 - **Markdown Support**: Create and edit notes in markdown format
 - **YAML Frontmatter**: Organize notes with metadata
 - **Internal Linking**: Supports `[[link]]` and `[[link|display text]]` syntax
-- **Notes View**: See files created on the selected date
 
 ### Calendar Views
 - **Multiple Views**: Year, month, and week calendar views

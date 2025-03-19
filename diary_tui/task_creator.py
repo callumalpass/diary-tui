@@ -111,7 +111,8 @@ class TaskCreator:
 def draw_rectangle(win, y1, x1, y2, x2):
     # Removed border drawing
     try:
-        win.border()
+        # win.border() # Removed border call - as suggested for performance
+        pass
     except curses.error:
         pass
 
@@ -484,3 +485,4 @@ def main_cli():
 
 if __name__ == "__main__":
     main_cli()
+
